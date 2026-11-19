@@ -1,0 +1,41 @@
+plugins {
+    id 'application'
+}
+
+group = 'hansung.arcade'
+version = '0.1.0'
+
+java {
+    // 클라이언트(hansung_arcade)와 같은 JDK
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // 메시지는 한 줄짜리 JSON (네프 API 공통 규칙)
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.2'
+    // 로깅: 코드에서는 SLF4J API로 로그를 남기고, 실제 출력은 Logback이 맡는다 (설정: resources/logback.xml)
+    implementation 'org.slf4j:slf4j-api:2.0.18'
+    implementation 'ch.qos.logback:logback-classic:1.5.38'
+
+    testImplementation platform('org.junit:junit-bom:5.12.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+application {
+    mainClass = 'hansung.arcade.HansungArcadeServerApplication'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
