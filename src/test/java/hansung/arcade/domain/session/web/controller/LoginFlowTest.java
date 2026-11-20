@@ -139,6 +139,11 @@ class LoginFlowTest {
             client.login(1, "부기");
 
             assertEquals("ALREADY_LOGGED_IN", client.login(2, "꾸꾸").at("/error/code").asText());
+            // body 모양이 틀려도 이미 로그인했다는 것을 먼저 알린다
+            for (String nicknames : new String[]{"\"부기\"", "[true]", "[null,\"ab\"]", "[[\"ab\"]]"}) {
+                client.send("{\"type\":\"LOGIN\",\"id\":3,\"body\":{\"nicknames\":" + nicknames + "}}");
+                assertEquals("ALREADY_LOGGED_IN", client.receive().at("/error/code").asText(), nicknames);
+            }
         }
     }
 

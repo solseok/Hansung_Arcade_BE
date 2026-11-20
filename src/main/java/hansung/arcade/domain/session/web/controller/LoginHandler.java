@@ -7,6 +7,7 @@ import hansung.arcade.core.net.Message;
 import hansung.arcade.core.net.MessageHandler;
 import hansung.arcade.core.net.ProtocolException;
 import hansung.arcade.domain.session.business.SessionService;
+import hansung.arcade.domain.session.model.Session;
 import hansung.arcade.domain.session.web.dto.LoginRequest;
 import hansung.arcade.domain.session.web.dto.LoginResponse;
 import hansung.arcade.global.exception.GameException;
@@ -33,10 +34,13 @@ public final class LoginHandler implements MessageHandler {
 
     @Override
     public Object handle(Connection connection, Message request) throws ProtocolException {
-        requireStringArray(request.body().get("nicknames"));
-        LoginRequest body = request.bodyAs(LoginRequest.class);
+        Session session = Sessions.of(connection);
         try {
-            return LoginResponse.from(sessionService.login(Sessions.of(connection), body.nicknames()));
+            // 로그인한 연결이 무엇을 보내든 ALREADY_LOGGED_IN이 먼저다. 그래서 body 모양보다 먼저 본다
+            sessionService.requireBeforeLogin(session);
+            requireStringArray(request.body().get("nicknames"));
+            LoginRequest body = request.bodyAs(LoginRequest.class);
+            return LoginResponse.from(sessionService.login(session, body.nicknames()));
         } catch (GameException e) {
             throw new ProtocolException(e.code(), e.getMessage());
         }

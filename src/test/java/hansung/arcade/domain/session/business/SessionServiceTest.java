@@ -5,6 +5,7 @@ import hansung.arcade.domain.player.model.Player;
 import hansung.arcade.domain.player.repository.InMemoryPlayerRepository;
 import hansung.arcade.domain.session.model.Session;
 import hansung.arcade.domain.session.model.SessionState;
+import hansung.arcade.global.exception.CommonErrorCode;
 import hansung.arcade.global.exception.GameException;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
@@ -12,9 +13,11 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -124,25 +127,34 @@ class SessionServiceTest {
     void 로그인과_끊김이_동시에_일어나도_닉네임이_남지_않는다() throws Exception {
         Session session = service.open(1);
         CountDownLatch start = new CountDownLatch(1);
+        AtomicReference<Throwable> unexpected = new AtomicReference<>();
         Thread login = Thread.ofPlatform().start(() -> {
             try {
                 start.await();
                 service.login(session, List.of("상상부기", "꾸꾸"));
-            } catch (GameException | InterruptedException ignored) {
+            } catch (GameException e) {
                 // 끊김이 먼저면 WRONG_STATE
+                if (!CommonErrorCode.WRONG_STATE.equals(e.code())) {
+                    unexpected.set(e);
+                }
+            } catch (Throwable e) {
+                unexpected.set(e);
             }
         });
         Thread close = Thread.ofPlatform().start(() -> {
             try {
                 start.await();
                 service.close(session);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
+            } catch (Throwable e) {
+                unexpected.set(e);
             }
         });
         start.countDown();
         login.join(3000);
         close.join(3000);
+
+        assertFalse(login.isAlive() || close.isAlive(), "3초 안에 끝나지 않았습니다");
+        assertNull(unexpected.get());
 
         assertEquals(SessionState.CLOSED, session.state());
         assertTrue(repository.findAll().isEmpty(), repository.findAll().toString());

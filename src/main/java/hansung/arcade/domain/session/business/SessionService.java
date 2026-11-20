@@ -55,7 +55,7 @@ public final class SessionService {
      */
     public List<Player> login(Session session, List<String> rawNicknames) {
         // 로그인한 연결이 무엇을 보내든 ALREADY_LOGGED_IN이 먼저다 (아래 lock 안에서 한 번 더 본다)
-        requireConnected(session);
+        requireBeforeLogin(session);
         if (rawNicknames == null || rawNicknames.isEmpty() || rawNicknames.size() > MAX_LOCAL_PLAYERS) {
             throw new GameException(BAD_MESSAGE, "닉네임은 1~2개를 보내야 합니다.");
         }
@@ -77,7 +77,7 @@ public final class SessionService {
 
         // 등록과 세션 변경 사이에 끊김 정리(close)가 끼어들면 닉네임이 영영 안 풀린다. 세션을 잠근 채 둘 다 한다.
         synchronized (session) {
-            requireConnected(session);
+            requireBeforeLogin(session);
             List<Player> loggedIn;
             try {
                 loggedIn = players.saveAll(nicknames);
@@ -90,7 +90,12 @@ public final class SessionService {
         }
     }
 
-    private static void requireConnected(Session session) {
+    /**
+     * 아직 로그인하지 않은 연결인지 확인한다. LOGIN 핸들러는 body 모양을 보기 전에 이걸 먼저 부른다.
+     *
+     * @throws GameException 로그인했으면 ALREADY_LOGGED_IN, 끊겼으면 WRONG_STATE
+     */
+    public void requireBeforeLogin(Session session) {
         switch (session.state()) {
             case CONNECTED -> {
             }
