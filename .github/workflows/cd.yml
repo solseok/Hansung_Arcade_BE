@@ -1,0 +1,159 @@
+name: CD
+
+# main으로 merge되면(= main push) 테스트 → Docker 이미지(GHCR) → EC2 배포 순서로 돈다.
+# 설정 방법은 deploy/README.md
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 배포는 한 번에 하나씩, 진행 중인 배포는 끊지 않는다
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Build and test
+        run: ./gradlew build
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: build/reports/tests/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  image:
+    name: Docker image → GHCR
+    needs: test
+    # workflow_dispatch를 다른 브랜치에서 실행해도 이미지(:latest)와 운영 서버는 건드리지 않는다
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 이미지 이름은 소문자만 된다 (solseok/Hansung_Arcade_BE → solseok/hansung_arcade_be)
+      - name: Image name
+        id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      # EC2가 ARM(Graviton)이면 저장소 변수 IMAGE_PLATFORM을 linux/arm64로 둔다. QEMU가 그 빌드를 맡는다
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: ${{ vars.IMAGE_PLATFORM || 'linux/amd64' }}
+          tags: |
+            ${{ steps.name.outputs.image }}:${{ github.sha }}
+            ${{ steps.name.outputs.image }}:latest
+          # 이 라벨로 패키지가 저장소에 묶여, 배포 job의 GITHUB_TOKEN으로도 받을 수 있다
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Settings → Environments → production 에서 승인자, 배포 브랜치(main)를 걸 수 있다
+    environment:
+      name: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          # 호스트 키는 시크릿으로 고정한다. 배포 때마다 처음 본 키를 믿으면 중간자가 끼어들 수 있다
+          if [ -z "$EC2_HOST" ] || [ -z "$EC2_SSH_KEY" ] || [ -z "$EC2_KNOWN_HOSTS" ]; then
+            echo "::error::production 환경 시크릿 EC2_HOST, EC2_SSH_KEY, EC2_KNOWN_HOSTS가 필요합니다. deploy/README.md를 보세요."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2
+          chmod 600 ~/.ssh/ec2
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER || 'ec2-user' }}
+          IMAGE: ${{ needs.image.outputs.image }}
+          HOST_PORT: ${{ vars.SERVER_PORT || '9000' }}
+          MEMORY: ${{ vars.SERVER_MEMORY || '512m' }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 토큰은 명령줄에 남지 않게 표준입력 첫 줄로 넘기고, 나머지 줄은 배포 스크립트다
+        run: |
+          # 원격 명령에 들어가는 값은 형식을 먼저 확인한다
+          [[ "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "::error::EC2_USER 형식이 틀렸습니다"; exit 1; }
+          [[ "$HOST_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "::error::SERVER_PORT는 숫자여야 합니다"; exit 1; }
+          [[ "$MEMORY" =~ ^[0-9]+[mg]$ ]] || { echo "::error::SERVER_MEMORY 예: 512m"; exit 1; }
+          remote="read -r GHCR_TOKEN && export GHCR_TOKEN GHCR_USER=$(printf '%q' "$GHCR_USER")"
+          remote+=" && bash -s -- $(printf '%q ' "$IMAGE" "$GITHUB_SHA" "$HOST_PORT" "$MEMORY")"
+          { printf '%s\n' "$GHCR_TOKEN"; cat deploy/ec2-deploy.sh; } | ssh -i ~/.ssh/ec2 \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 \
+            "$EC2_USER@$EC2_HOST" "$remote"
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/ec2
