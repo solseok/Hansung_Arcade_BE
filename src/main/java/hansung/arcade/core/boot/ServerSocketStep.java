@@ -6,7 +6,7 @@ import hansung.arcade.core.server.ServerContext;
 import hansung.arcade.core.server.ServerProperties;
 
 /**
- * 3단계: 설정값 network.port로 {@link java.net.ServerSocket}을 열고 {@link GameServer}를 등록한다.
+ * 4단계: 설정값 network.port로 {@link java.net.ServerSocket}을 열고 {@link GameServer}를 등록한다.
  * 포트를 이미 다른 프로그램이 쓰고 있으면 여기서 실패한다. 접속은 아직 받지 않는다.
  */
 public final class ServerSocketStep implements BootStep {
