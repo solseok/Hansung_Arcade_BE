@@ -6,6 +6,7 @@ import hansung.arcade.core.boot.BootStep;
 import hansung.arcade.core.boot.DispatcherStep;
 import hansung.arcade.core.boot.PropertiesStep;
 import hansung.arcade.core.boot.ServerSocketStep;
+import hansung.arcade.core.boot.ServiceStep;
 import hansung.arcade.core.net.GameServer;
 import org.junit.jupiter.api.Test;
 
@@ -85,13 +86,13 @@ class ServerApplicationTest {
     void 기본_단계는_설정_처리기_소켓_접속_순서다() {
         List<Class<?>> types = ServerApplication.defaultSteps().stream().<Class<?>>map(Object::getClass).toList();
 
-        assertEquals(List.of(PropertiesStep.class, DispatcherStep.class, ServerSocketStep.class, AcceptStep.class), types);
+        assertEquals(List.of(PropertiesStep.class, ServiceStep.class, DispatcherStep.class, ServerSocketStep.class, AcceptStep.class), types);
     }
 
     @Test
     void 포트를_이미_쓰고_있으면_소켓_단계에서_실패한다() throws Exception {
         try (ServerSocket taken = new ServerSocket(0)) {
-            List<BootStep> steps = List.of(new PropertiesStep(), new DispatcherStep(), new ServerSocketStep());
+            List<BootStep> steps = List.of(new PropertiesStep(), new ServiceStep(), new DispatcherStep(), new ServerSocketStep());
 
             BootException e = assertThrows(BootException.class,
                     () -> new ServerApplication(ServerApplicationTest.class, steps).boot("--network.port=" + taken.getLocalPort()));
@@ -103,7 +104,7 @@ class ServerApplicationTest {
 
     @Test
     void 포트_0이면_빈_포트를_연다() {
-        List<BootStep> steps = List.of(new PropertiesStep(), new DispatcherStep(), new ServerSocketStep());
+        List<BootStep> steps = List.of(new PropertiesStep(), new ServiceStep(), new DispatcherStep(), new ServerSocketStep());
 
         ServerContext context = new ServerApplication(ServerApplicationTest.class, steps).boot("--network.port=0");
 
