@@ -1,0 +1,11 @@
+# Docker 빌드에 필요한 것은 gradlew, gradle/, build.gradle, settings.gradle, src/ 뿐이다
+.git
+.github
+.gradle
+.idea
+.omc
+.gstack
+build
+out
+docs
+*.md
