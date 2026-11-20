@@ -18,7 +18,8 @@ READY_TIMEOUT=30
 # 되돌릴 수 있게 남겨 둘 이미지 수 (지금 것 포함)
 KEEP_IMAGES=3
 
-if ! [[ "${HOST_PORT}" =~ ^[0-9]{1,5}$ ]] || ! [[ "${MEMORY}" =~ ^[0-9]+[mg]$ ]]; then
+if ! [[ "${HOST_PORT}" =~ ^[0-9]{1,5}$ ]] || (( HOST_PORT < 1 || HOST_PORT > 65535 )) \
+    || ! [[ "${MEMORY}" =~ ^[0-9]+[mg]$ ]]; then
     echo "!!! 포트(${HOST_PORT})나 메모리 한도(${MEMORY}) 형식이 틀렸습니다. 예: 9000, 512m" >&2
     exit 1
 fi

@@ -7,9 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# 배포는 한 번에 하나씩, 진행 중인 배포는 끊지 않는다
+# 배포는 브랜치마다 한 번에 하나씩, 진행 중인 배포는 끊지 않는다.
+# 다른 브랜치의 수동 실행(테스트만 돎)이 대기 중인 main 배포를 밀어내지 않게 그룹을 브랜치로 나눈다
 concurrency:
-  group: cd-production
+  group: cd-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -70,6 +71,7 @@ jobs:
 
       # EC2가 ARM(Graviton)이면 저장소 변수 IMAGE_PLATFORM을 linux/arm64로 둔다. QEMU가 그 빌드를 맡는다
       - name: Set up QEMU
+        if: vars.IMAGE_PLATFORM && vars.IMAGE_PLATFORM != 'linux/amd64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -145,7 +147,8 @@ jobs:
         run: |
           # 원격 명령에 들어가는 값은 형식을 먼저 확인한다
           [[ "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "::error::EC2_USER 형식이 틀렸습니다"; exit 1; }
-          [[ "$HOST_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "::error::SERVER_PORT는 숫자여야 합니다"; exit 1; }
+          [[ "$HOST_PORT" =~ ^[0-9]{1,5}$ ]] && (( HOST_PORT >= 1 && HOST_PORT <= 65535 )) \
+            || { echo "::error::SERVER_PORT는 1~65535여야 합니다"; exit 1; }
           [[ "$MEMORY" =~ ^[0-9]+[mg]$ ]] || { echo "::error::SERVER_MEMORY 예: 512m"; exit 1; }
           remote="read -r GHCR_TOKEN && export GHCR_TOKEN GHCR_USER=$(printf '%q' "$GHCR_USER")"
           remote+=" && bash -s -- $(printf '%q ' "$IMAGE" "$GITHUB_SHA" "$HOST_PORT" "$MEMORY")"

@@ -18,7 +18,7 @@ Actions 화면에서 CD를 직접 실행(`Run workflow`)할 수도 있지만, �
 ## 1. EC2 준비 (한 번)
 
 1. 인스턴스를 만듭니다. Amazon Linux 2023이나 Ubuntu, t3.micro 이상을 쓰면 됩니다.
-   - Graviton(ARM)을 쓰면 4번의 `IMAGE_PLATFORM`을 꼭 설정하세요.
+   - Graviton(ARM)을 쓰면 "2. GitHub 설정"의 `IMAGE_PLATFORM`을 꼭 설정하세요.
 2. 보안 그룹 인바운드 규칙을 엽니다.
    - `9000/tcp`: 게임 클라이언트가 접속합니다. 수업이나 팀 범위라면 필요한 IP 대역만 엽니다.
    - `22/tcp`: GitHub Actions가 SSH로 들어옵니다. Actions 러너 IP는 고정되어 있지 않습니다.
@@ -42,7 +42,8 @@ Actions 화면에서 CD를 직접 실행(`Run workflow`)할 수도 있지만, �
 
    ```bash
    ssh-keygen -t ed25519 -f hansung-deploy -N "" -C "github-actions-deploy"
-   ssh-copy-id -i hansung-deploy.pub ec2-user@<EC2 주소>
+   # EC2는 비밀번호 로그인이 막혀 있으므로, 인스턴스를 만들 때 받은 .pem 키로 접속해 공개 키를 등록한다
+   ssh-copy-id -i hansung-deploy.pub -o "IdentityFile=<인스턴스 생성 때 받은 .pem>" ec2-user@<EC2 주소>
    ```
 
    EC2의 `~/.ssh/authorized_keys`에서 이 키 줄 앞에 `restrict `를 붙이면 포트 포워딩, 에이전트 전달, pty를 막을 수 있습니다. 명령 실행은 그대로 됩니다.
