@@ -151,4 +151,36 @@ class BootWiringTest {
             assertEquals(1, state.at("/body/players").size());
         }
     }
+
+    @Test
+    void 조립한_서버에서_로딩_시간_안에_LOADED를_보내지_않은_연결은_방에서도_빠진다() throws IOException {
+        try (Client host = new Client("방장"); Client guest = new Client("손님"); Client third = new Client("셋째")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            host.receive("ROOM_CREATE");
+            for (Client client : List.of(guest, third)) {
+                client.send("{\"type\":\"ROOM_JOIN\",\"id\":2,\"body\":{\"roomNumber\":1}}");
+                client.receive("ROOM_JOIN");
+            }
+            guest.send("{\"type\":\"SELECT_TEAM\",\"body\":{\"team\":\"BLUE\"}}");
+            third.send("{\"type\":\"SELECT_TEAM\",\"body\":{\"team\":\"GREEN\"}}");
+            for (Client client : List.of(guest, third)) {
+                client.send("{\"type\":\"READY\",\"body\":{\"ready\":true}}");
+                client.send("{\"type\":\"PING\",\"id\":3,\"body\":{}}");
+                client.receive("PING");
+            }
+            host.send("{\"type\":\"GAME_START\",\"id\":4,\"body\":{}}");
+            host.receive("GAME_STARTED");
+            host.send("{\"type\":\"LOADED\",\"body\":{}}");
+            guest.send("{\"type\":\"LOADED\",\"body\":{}}");
+
+            // 셋째는 LOADED를 보내지 않는다. 로딩 제한(10초)이 지나면 경기와 방에서 함께 빠진다
+            third.socket.setSoTimeout(15_000);
+            third.receive("PLAYER_LEFT");
+            third.receive("LOBBY_ROOMS");
+            third.send("{\"type\":\"ROOM_LIST\",\"id\":5,\"body\":{}}");
+            assertTrue(third.receive("ROOM_LIST").get("ok").asBoolean());
+            host.socket.setSoTimeout(15_000);
+            assertEquals("셋째님이 나갔습니다.", host.receive("CHAT_MESSAGE").at("/body/text").asText());
+        }
+    }
 }

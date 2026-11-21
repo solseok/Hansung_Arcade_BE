@@ -43,7 +43,7 @@ class RoomAccessTest {
                     "teamCount")),
             Map.entry(RoomMember.class, Set.of("playerId", "connectionId", "nickname", "slot", "character", "team",
                     "ready")),
-            Map.entry(ChatText.class, Set.of("byteLength", "clean")),
+            Map.entry(ChatText.class, Set.of("byteLength", "clean", "stripBlank", "isBlank")),
             Map.entry(RoomMessages.class, Set.of("list", "state", "chat", "notice")),
             Map.entry(RoomService.class, Set.of("list", "create", "join", "quickJoin", "leave", "exitGame", "disconnect", "ready",
                     "selectCharacter", "selectTeam", "changeMap", "chat", "startGame", "finishGame")),

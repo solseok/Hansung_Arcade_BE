@@ -133,7 +133,7 @@ class RoomTest {
     }
 
     @Test
-    void 한_연결의_플레이어마다_값이_다르면_바뀐_사람만_준비가_풀린다() {
+    void 한_연결의_플레이어_가운데_하나라도_바뀌면_그_연결의_준비가_모두_풀린다() {
         Room room = new Room(1, "a", 8);
         room.seat(100, players(1), "kkukku", Team.RED);
         room.seat(200, players(2), "kkukku", Team.RED);
@@ -141,12 +141,19 @@ class RoomTest {
         room.ready(200, true);
 
         assertTrue(room.selectCharacter(200, "kkukku"));
-        assertEquals(List.of(true, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+        assertEquals(List.of(false, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+        assertEquals(List.of("kkukku", "kkukku"), room.membersOf(200).stream().map(RoomMember::character).toList());
 
         room.ready(200, true);
-        assertTrue(room.selectTeam(200, Team.RED));
-        assertEquals(List.of(true, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
-        assertEquals(List.of("kkukku", "kkukku"), room.membersOf(200).stream().map(RoomMember::character).toList());
+        assertTrue(room.selectTeam(200, Team.BLUE));
+        assertEquals(List.of(false, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+        assertEquals(List.of(Team.BLUE, Team.BLUE), room.membersOf(200).stream().map(RoomMember::team).toList());
+
+        // 모두 이미 그 값이면 아무것도 바뀌지 않는다
+        room.ready(200, true);
+        assertFalse(room.selectCharacter(200, "kkukku"));
+        assertFalse(room.selectTeam(200, Team.BLUE));
+        assertEquals(List.of(true, true), room.membersOf(200).stream().map(RoomMember::ready).toList());
     }
 
     @Test

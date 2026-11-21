@@ -5,22 +5,32 @@ import hansung.arcade.core.net.Json;
 import hansung.arcade.domain.game.business.EventSender;
 import hansung.arcade.domain.game.business.GameService;
 import hansung.arcade.domain.game.business.GameService.Participant;
+import hansung.arcade.domain.game.model.GameMaps;
+import hansung.arcade.domain.game.model.Match;
 import hansung.arcade.domain.game.model.Team;
 import hansung.arcade.domain.game.model.MatchEvent;
 import hansung.arcade.domain.player.model.Player;
 import hansung.arcade.global.exception.GameException;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
+import java.util.function.LongConsumer;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,7 +49,10 @@ class RoomServiceTest {
     }
 
     private final AtomicLong clock = new AtomicLong(1_000);
-    private final List<Sent> sent = new ArrayList<>();
+    private final List<Sent> sent = Collections.synchronizedList(new ArrayList<>());
+    /** 방 쪽 푸시를 하나 넣을 때마다 (받는 연결, type)으로 불린다. lock 안에서 넣는지 확인할 때 끼어든다 */
+    private volatile BiConsumer<Long, String> onSend = (to, type) -> {
+    };
     private final Set<Long> loggedIn = new HashSet<>();
     /** 끊겼지만 아직 끊김 정리가 돌지 않은 연결 */
     private final Set<Long> closed = new HashSet<>();
@@ -68,6 +81,7 @@ class RoomServiceTest {
             @Override
             public void send(Collection<Long> connectionIds, String type, Object body) {
                 for (Long id : connectionIds) {
+                    onSend.accept(id, type);
                     sent.add(new Sent(id, type, Json.MAPPER.valueToTree(body)));
                 }
             }
@@ -88,6 +102,7 @@ class RoomServiceTest {
         }, games, clock::get);
         games.onFinished(match -> rooms.finishGame(match.matchId()));
         games.onExit(rooms::exitGame);
+        games.onDropped(rooms::exitGame);
     }
 
     private void recordEvent(MatchEvent event) {
@@ -114,6 +129,18 @@ class RoomServiceTest {
         // 응답 body가 null이면 {}로 나간다 (Message.ok와 같다)
         return body -> sent.add(new Sent(connection, "REPLY",
                 body == null ? Json.object() : Json.MAPPER.valueToTree(body)));
+    }
+
+    /** ROOM_LIST 응답 body. 응답은 한 번만 온다 */
+    private JsonNode listOf(long connection) {
+        List<Object> replies = new ArrayList<>();
+        rooms.list(connection, replies::add);
+        assertEquals(1, replies.size(), "ROOM_LIST 응답은 한 번");
+        return Json.MAPPER.valueToTree(replies.getFirst());
+    }
+
+    private List<JsonNode> roomStatesTo(long connection) {
+        return to(connection).stream().filter(s -> s.type().equals("ROOM_STATE")).map(Sent::body).toList();
     }
 
     private static void assertCode(String code, Runnable action) {
@@ -277,10 +304,27 @@ class RoomServiceTest {
         rooms.create(3, one(3, "다다"), "\t앞뒤 공백 문자\n", 8, reply(3));
         assertEquals("앞뒤 공백 문자", last(3, "REPLY").at("/room/title").asText());
 
-        for (String title : List.of("줄\n바꿈", "탭\t글", "폭\u200B없음", "\u200B", "제어\u0007", "줄\u2028구분",
-                "a\uD800", "\uDC00b")) {
+        for (String title : List.of("줄\n바꿈", "탭\t글", "\u200B", "제어\u0007", "줄\u2028구분", "a\uD800", "\uDC00b",
+                "\u3164", "\u00A0", "\u3164\u200B\u2800")) {
             assertCode("TITLE_INVALID", () -> rooms.create(2, one(2, "나나"), title, 8, reply(2)));
         }
+    }
+
+    @Test
+    void 제목의_앞뒤_빈칸은_채팅과_같은_규칙으로_떼고_이모지를_잇는_글자는_둔다() {
+        rooms.create(1, one(1, "가가"), "\u3000\u3164제목\u00A0 ", 8, reply(1));
+        assertEquals("제목", last(1, "REPLY").at("/room/title").asText());
+
+        String family = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67 가족방";
+        rooms.create(2, one(2, "나나"), family, 8, reply(2));
+        assertEquals(family, last(2, "REPLY").at("/room/title").asText());
+
+        rooms.create(3, one(3, "다다"), "폭\u200B없음", 8, reply(3));
+        assertEquals("폭\u200B없음", last(3, "REPLY").at("/room/title").asText());
+
+        // 30자는 앞뒤 빈칸을 뗀 뒤에 센다
+        rooms.create(4, one(4, "라라"), "  " + "가".repeat(30) + "  ", 8, reply(4));
+        assertEquals("가".repeat(30), last(4, "REPLY").at("/room/title").asText());
     }
 
     @Test
@@ -352,7 +396,7 @@ class RoomServiceTest {
         rooms.create(2, one(2, "다다"), "하나", 4, reply(2));
         rooms.changeMap(2, "random", reply(2));
 
-        JsonNode list = Json.MAPPER.valueToTree(rooms.list(3));
+        JsonNode list = listOf(3);
 
         assertEquals(2, list.get("rooms").size());
         JsonNode first = list.at("/rooms/0");
@@ -369,15 +413,15 @@ class RoomServiceTest {
 
     @Test
     void 방이_없으면_빈_목록() {
-        assertEquals("{\"rooms\":[]}", Json.MAPPER.valueToTree(rooms.list(1)).toString());
+        assertEquals("{\"rooms\":[]}", listOf(1).toString());
     }
 
     @Test
     void 방_안에서_목록을_보면_WRONG_STATE() {
         rooms.create(1, one(1, "가가"), "a", 8, reply(1));
 
-        assertCode("WRONG_STATE", () -> rooms.list(1));
-        assertEquals("방 안에서는 목록을 볼 수 없습니다.", message(() -> rooms.list(1)));
+        assertCode("WRONG_STATE", () -> rooms.list(1, reply(1)));
+        assertEquals("방 안에서는 목록을 볼 수 없습니다.", message(() -> rooms.list(1, reply(1))));
     }
 
     // ---------- ROOM_JOIN ----------
@@ -632,7 +676,7 @@ class RoomServiceTest {
 
         assertEquals("{\"rooms\":[]}", last(9, "LOBBY_ROOMS").toString());
         assertEquals("{\"rooms\":[]}", last(1, "LOBBY_ROOMS").toString());
-        assertEquals("{\"rooms\":[]}", Json.MAPPER.valueToTree(rooms.list(1)).toString());
+        assertEquals("{\"rooms\":[]}", listOf(1).toString());
 
         // 처음 정한 정원도 함께 지워져 새 방은 새로 정한 정원을 따른다
         rooms.create(1, one(1, "가가"), "a", 8, reply(1));
@@ -730,7 +774,7 @@ class RoomServiceTest {
         assertEquals(List.of("LOBBY_ROOMS"), typesTo(3).stream().filter(t -> !t.equals("PLAYER_LEFT")).toList());
         assertEquals(2, last(9, "LOBBY_ROOMS").at("/rooms/0/players").asInt());
         // 로비로 왔으므로 목록을 보고 다른 방을 만들 수 있다
-        assertEquals(1, Json.MAPPER.valueToTree(rooms.list(3)).get("rooms").size());
+        assertEquals(1, listOf(3).get("rooms").size());
         rooms.create(3, one(3, "셋째"), "b", 8, reply(3));
         assertEquals(2, last(3, "REPLY").at("/room/number").asInt());
     }
@@ -751,15 +795,57 @@ class RoomServiceTest {
     }
 
     @Test
-    void 게임_중이_아니면_GAME_EXIT은_방을_건드리지_않는다() {
+    void 경기가_끝난_뒤에_온_GAME_EXIT도_방에서_빼_로비로_보낸다() {
+        // 방장 RED, 손님 BLUE, 셋째 RED. 손님이 끊기면 RED만 남아 경기가 끝난다
+        readyToStart();
+        rooms.join(3, one(3, "셋째"), 1, reply(3));
+        rooms.ready(3, true);
+        rooms.startGame(1, reply(1));
+        rooms.disconnect(2);
+        games.disconnect(2);
+        assertEquals(0, games.activeMatches());
+        clearSent();
+
+        // 방장은 GAME_OVER를 받기 전에 나가기를 눌러 이미 로비로 갔다
+        assertCode("WRONG_STATE", () -> games.exit(1));
+
+        assertEquals(List.of("셋째"), nicknames(last(3, "ROOM_STATE")));
+        assertEquals(List.of("방장님이 나갔습니다.", "셋째님이 방장이 되었습니다."), chatsTo(3));
+        assertEquals(1, listOf(1).get("rooms").size());
+        rooms.create(1, one(1, "방장"), "새 방", 8, reply(1));
+    }
+
+    @Test
+    void 나가기를_처리하는_도중_경기가_끝나도_방에서_빠진다() {
+        readyToStart();
+        rooms.join(3, one(3, "셋째"), 1, reply(3));
+        rooms.selectTeam(3, "GREEN");
+        rooms.ready(3, true);
+        rooms.startGame(1, reply(1));
+        // 나가기를 처리하는 사이 다른 스레드에서 남은 사람이 모두 끊겨 경기가 먼저 끝난다
+        games.onExit(id -> {
+            games.disconnect(2);
+            games.disconnect(3);
+            rooms.exitGame(id);
+        });
+
+        assertCode("WRONG_STATE", () -> games.exit(1));
+
+        assertEquals(1, listOf(1).get("rooms").size());
+        assertEquals(List.of("손님", "셋째"), nicknames(last(2, "ROOM_STATE")));
+    }
+
+    @Test
+    void 대기실에서_온_GAME_EXIT은_나가기와_같게_방에서_뺀다() {
+        loggedIn.add(9L);
         hostAndGuest();
         clearSent();
 
-        rooms.exitGame(2);
+        assertCode("WRONG_STATE", () -> games.exit(2));
 
-        assertTrue(sent.isEmpty());
-        rooms.ready(2, true);
-        assertEquals(List.of("방장", "손님"), nicknames(last(1, "ROOM_STATE")));
+        assertEquals(List.of("ROOM_STATE", "CHAT_MESSAGE"), typesTo(1));
+        assertEquals(List.of("LOBBY_ROOMS"), typesTo(2));
+        assertEquals(1, last(9, "LOBBY_ROOMS").at("/rooms/0/players").asInt());
     }
 
     @Test
@@ -1185,7 +1271,7 @@ class RoomServiceTest {
         assertEquals(2, started.get("players").size());
         assertEquals(List.of("LOBBY_ROOMS"), typesTo(9));
         assertEquals("PLAYING", last(9, "LOBBY_ROOMS").at("/rooms/0/status").asText());
-        assertEquals("PLAYING", Json.MAPPER.valueToTree(rooms.list(9)).at("/rooms/0/status").asText());
+        assertEquals("PLAYING", listOf(9).at("/rooms/0/status").asText());
     }
 
     @Test
@@ -1346,8 +1432,9 @@ class RoomServiceTest {
         games.disconnect(2);
 
         assertEquals(0, games.activeMatches());
-        assertTrue(typesTo(9).stream().noneMatch(type -> type.equals("ROOM_STATE")));
-        assertEquals("{\"rooms\":[]}", Json.MAPPER.valueToTree(rooms.list(9)).toString());
+        assertTrue(sent.stream().noneMatch(s -> s.type().equals("ROOM_STATE") || s.type().equals("LOBBY_ROOMS")),
+                sent.toString());
+        assertEquals("{\"rooms\":[]}", listOf(9).toString());
     }
 
     @Test
@@ -1367,7 +1454,7 @@ class RoomServiceTest {
         assertEquals("WAITING", last(9, "LOBBY_ROOMS").at("/rooms/0/status").asText());
         rooms.disconnect(1);
         rooms.disconnect(2);
-        assertEquals("{\"rooms\":[]}", Json.MAPPER.valueToTree(rooms.list(9)).toString());
+        assertEquals("{\"rooms\":[]}", listOf(9).toString());
     }
 
     // ---------- 끊김과 겹친 요청 ----------
@@ -1383,7 +1470,7 @@ class RoomServiceTest {
         assertCode("WRONG_STATE", () -> rooms.quickJoin(2, one(2, "손님"), reply(2)));
         assertEquals("이미 끊긴 연결입니다.", message(() -> rooms.join(2, one(2, "손님"), 1, reply(2))));
         assertTrue(sent.isEmpty());
-        assertEquals(1, Json.MAPPER.valueToTree(rooms.list(9)).at("/rooms/0/players").asInt());
+        assertEquals(1, listOf(9).at("/rooms/0/players").asInt());
     }
 
     @Test
@@ -1450,7 +1537,7 @@ class RoomServiceTest {
         rooms.ready(4, true);
         rooms.startGame(2, reply(2));
 
-        assertEquals("PLAYING", Json.MAPPER.valueToTree(rooms.list(9)).at("/rooms/0/status").asText());
+        assertEquals("PLAYING", listOf(9).at("/rooms/0/status").asText());
     }
 
     // ---------- 경기를 열지 못할 때 ----------
@@ -1480,7 +1567,7 @@ class RoomServiceTest {
         assertTrue(typesTo(2).containsAll(List.of("ROOM_STATE", "CHAT_MESSAGE")));
         // 로비에는 게임 중이라고 알린 적이 없다
         assertTrue(typesTo(9).isEmpty());
-        assertEquals("WAITING", Json.MAPPER.valueToTree(rooms.list(9)).at("/rooms/0/status").asText());
+        assertEquals("WAITING", listOf(9).at("/rooms/0/status").asText());
     }
 
     @Test
@@ -1510,8 +1597,15 @@ class RoomServiceTest {
         assertEquals(1, to(1).stream().filter(s -> s.type().equals("REPLY")).count());
         assertEquals("WAITING", last(1, "ROOM_STATE").at("/room/status").asText());
         assertEquals("게임을 시작하지 못했습니다. 다시 시도해 주세요.", last(2, "CHAT_MESSAGE").get("text").asText());
-        rooms.leave(2, reply(2));
-        assertEquals(List.of("방장"), nicknames(last(1, "ROOM_STATE")));
+        // 경기가 남지 않고, 아무에게도 GAME_STARTED가 가지 않았다
+        assertEquals(0, games.activeMatches());
+        assertTrue(sent.stream().noneMatch(s -> s.type().equals("GAME_STARTED")));
+
+        // 준비는 그대로라 바로 다시 시작할 수 있다
+        clearSent();
+        rooms.startGame(1, reply(1));
+        assertTrue(typesTo(2).contains("GAME_STARTED"));
+        assertEquals(1, games.activeMatches());
     }
 
     @Test
@@ -1657,5 +1751,546 @@ class RoomServiceTest {
             holder.join();
         }
         assertNotNull(last(1, "REPLY"));
+    }
+
+    // ---------- 명세 대조 리뷰에서 나온 빈틈 ----------
+
+    /** action을 다른 스레드에서 시작해 300ms 기다린다. 그 안에 끝났으면 true (lock에 막히지 않았다) */
+    private static boolean finishesWhileHeld(Runnable action, AtomicReference<Thread> started) {
+        Thread thread = new Thread(action);
+        started.set(thread);
+        thread.start();
+        try {
+            thread.join(300);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return !thread.isAlive();
+    }
+
+    @Test
+    void 대기실_상태는_lock_안에서_넣어_모두가_같은_순서로_받는다() throws InterruptedException {
+        hostAndGuest();
+        List<Player> third = one(3, "셋째");
+        rooms.join(3, third, 1, reply(3));
+        clearSent();
+        AtomicBoolean interleaved = new AtomicBoolean();
+        AtomicReference<Thread> other = new AtomicReference<>();
+        onSend = (to, type) -> {
+            if (type.equals("ROOM_STATE") && other.get() == null) {
+                interleaved.set(finishesWhileHeld(() -> rooms.ready(3, true), other));
+            }
+        };
+
+        rooms.ready(2, true);
+        other.get().join();
+        onSend = (to, type) -> {
+        };
+
+        assertFalse(interleaved.get(), "보내는 도중에 다른 변경이 끼어들었습니다 (lock 밖에서 보냄)");
+        assertEquals(2, roomStatesTo(1).size());
+        assertEquals(roomStatesTo(1), roomStatesTo(2));
+        assertEquals(roomStatesTo(1), roomStatesTo(3));
+    }
+
+    @Test
+    void 입장_응답은_lock_안에서_넣어_다음_변경보다_먼저_간다() throws InterruptedException {
+        rooms.create(1, one(1, "방장"), "a", 8, reply(1));
+        List<Player> guest = one(2, "손님");
+        List<Player> third = one(3, "셋째");
+        clearSent();
+        AtomicBoolean interleaved = new AtomicBoolean();
+        AtomicReference<Thread> other = new AtomicReference<>();
+
+        rooms.join(2, guest, 1, body -> {
+            sent.add(new Sent(2, "REPLY", Json.MAPPER.valueToTree(body)));
+            interleaved.set(finishesWhileHeld(() -> rooms.join(3, third, 1, reply(3)), other));
+        });
+        other.get().join();
+
+        assertFalse(interleaved.get(), "응답을 넣는 도중에 다른 입장이 끼어들었습니다 (lock 밖에서 응답)");
+        assertEquals(List.of("REPLY", "CHAT_MESSAGE", "ROOM_STATE", "CHAT_MESSAGE"), typesTo(2));
+        assertEquals(2, last(2, "REPLY").get("players").size());
+    }
+
+    @Test
+    void 방_목록_응답은_lock_안에서_넣어_로비_알림보다_늦게_오지_않는다() throws InterruptedException {
+        loggedIn.add(1L);
+        List<Player> maker = one(2, "만듦");
+        AtomicBoolean interleaved = new AtomicBoolean();
+        AtomicReference<Thread> other = new AtomicReference<>();
+
+        rooms.list(1, body -> {
+            sent.add(new Sent(1, "REPLY", Json.MAPPER.valueToTree(body)));
+            interleaved.set(finishesWhileHeld(() -> rooms.create(2, maker, "새 방", 8, reply(2)), other));
+        });
+        other.get().join();
+
+        assertFalse(interleaved.get(), "목록 응답을 넣는 도중에 방이 생겼습니다 (lock 밖에서 응답)");
+        assertEquals(List.of("REPLY", "LOBBY_ROOMS"), typesTo(1));
+        assertEquals("{\"rooms\":[]}", last(1, "REPLY").toString());
+        assertEquals(1, last(1, "LOBBY_ROOMS").get("rooms").size());
+    }
+
+    /** 연결 connections가 한꺼번에 action을 하고, 성공은 "OK", 실패는 code를 돌려준다 */
+    private static List<String> concurrently(List<Long> connections, LongConsumer action)
+            throws InterruptedException {
+        CountDownLatch start = new CountDownLatch(1);
+        List<String> results = Collections.synchronizedList(new ArrayList<>());
+        List<Thread> threads = new ArrayList<>();
+        for (long connection : connections) {
+            Thread thread = new Thread(() -> {
+                try {
+                    start.await();
+                    action.accept(connection);
+                    results.add("OK");
+                } catch (GameException e) {
+                    results.add(e.code());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            threads.add(thread);
+            thread.start();
+        }
+        start.countDown();
+        for (Thread thread : threads) {
+            thread.join(5_000);
+        }
+        return results;
+    }
+
+    private static long count(List<String> results, String result) {
+        return results.stream().filter(result::equals).count();
+    }
+
+    @RepeatedTest(20)
+    void 마지막_자리에_여럿이_동시에_들어와도_한_명만_들어간다() throws InterruptedException {
+        rooms.create(1, one(1, "방장"), "a", 2, reply(1));
+        List<Long> connections = new ArrayList<>();
+        Map<Long, List<Player>> players = new HashMap<>();
+        for (long c = 2; c <= 17; c++) {
+            connections.add(c);
+            players.put(c, one(c, "p" + c));
+        }
+
+        List<String> results = concurrently(connections, c -> rooms.join(c, players.get(c), 1, body -> {
+        }));
+
+        assertEquals(1, count(results, "OK"), results.toString());
+        assertEquals(15, count(results, "ROOM_FULL"), results.toString());
+        assertEquals(2, listOf(99).at("/rooms/0/players").asInt());
+    }
+
+    @RepeatedTest(20)
+    void 바로_시작이_동시에_몰려도_자리만큼만_들어간다() throws InterruptedException {
+        rooms.create(1, one(1, "가가"), "a", 2, reply(1));
+        rooms.create(2, one(2, "나나"), "b", 2, reply(2));
+        List<Long> connections = new ArrayList<>();
+        Map<Long, List<Player>> players = new HashMap<>();
+        for (long c = 3; c <= 10; c++) {
+            connections.add(c);
+            players.put(c, one(c, "p" + c));
+        }
+
+        List<String> results = concurrently(connections, c -> rooms.quickJoin(c, players.get(c), body -> {
+        }));
+
+        assertEquals(2, count(results, "OK"), results.toString());
+        assertEquals(6, count(results, "NO_ROOM"), results.toString());
+        JsonNode list = listOf(99);
+        assertEquals(2, list.at("/rooms/0/players").asInt());
+        assertEquals(2, list.at("/rooms/1/players").asInt());
+    }
+
+    @RepeatedTest(10)
+    void 방이_99개일_때_여럿이_동시에_만들어도_100개를_넘지_않고_번호가_겹치지_않는다() throws InterruptedException {
+        for (long c = 1; c <= 99; c++) {
+            rooms.create(c, one(c, "p" + c), "방" + c, 8, reply(c));
+        }
+        List<Long> connections = new ArrayList<>();
+        Map<Long, List<Player>> players = new HashMap<>();
+        for (long c = 100; c < 110; c++) {
+            connections.add(c);
+            players.put(c, one(c, "p" + c));
+        }
+
+        List<String> results = concurrently(connections, c -> rooms.create(c, players.get(c), "늦은 방", 8, body -> {
+        }));
+
+        assertEquals(1, count(results, "OK"), results.toString());
+        assertEquals(9, count(results, "ROOM_LIMIT"), results.toString());
+        JsonNode list = listOf(999);
+        assertEquals(100, list.get("rooms").size());
+        Set<Integer> numbers = new HashSet<>();
+        list.get("rooms").forEach(room -> numbers.add(room.get("number").asInt()));
+        assertEquals(100, numbers.size());
+    }
+
+    @Test
+    void 다른_방에_있는_사람은_대기실이든_게임_중이든_LOBBY_ROOMS를_받지_않는다() {
+        loggedIn.add(9L);
+        rooms.create(1, one(1, "대기"), "a", 8, reply(1));
+        rooms.create(2, one(2, "방장"), "b", 8, reply(2));
+        rooms.join(3, one(3, "손님"), 2, reply(3));
+        rooms.selectTeam(3, "BLUE");
+        rooms.ready(3, true);
+        rooms.startGame(2, reply(2));
+        clearSent();
+
+        rooms.create(4, one(4, "새방"), "c", 8, reply(4));
+
+        for (long c : new long[]{1, 2, 3, 4}) {
+            assertFalse(typesTo(c).contains("LOBBY_ROOMS"), c + "번 연결");
+        }
+        assertEquals(List.of("LOBBY_ROOMS"), typesTo(9));
+        assertEquals(3, last(9, "LOBBY_ROOMS").get("rooms").size());
+    }
+
+    @Test
+    void 바로_시작은_사람_수와_상관없이_번호가_가장_작은_방을_고르고_로비에_알린다() {
+        loggedIn.add(9L);
+        rooms.create(1, one(1, "가가"), "a", 8, reply(1));
+        rooms.create(2, one(2, "나나"), "b", 8, reply(2));
+        rooms.join(3, one(3, "다다"), 2, reply(3));
+        rooms.join(4, one(4, "라라"), 2, reply(4));
+        clearSent();
+
+        // 1번 방 1명, 2번 방 3명
+        rooms.quickJoin(5, one(5, "마마"), reply(5));
+        assertEquals(1, last(5, "REPLY").at("/room/number").asInt());
+        assertEquals(List.of("LOBBY_ROOMS"), typesTo(9));
+        assertEquals(2, last(9, "LOBBY_ROOMS").at("/rooms/0/players").asInt());
+
+        // 1번 방 4명, 2번 방 3명
+        rooms.join(6, one(6, "바바"), 1, reply(6));
+        rooms.join(7, one(7, "사사"), 1, reply(7));
+        rooms.quickJoin(8, one(8, "아아"), reply(8));
+        assertEquals(1, last(8, "REPLY").at("/room/number").asInt());
+    }
+
+    @Test
+    void 도배_방지는_2P_두_사람을_합쳐_연결마다_센다() {
+        rooms.create(1, two(1, "가가", "나나"), "a", 8, reply(1));
+        rooms.join(2, one(2, "다다"), 1, reply(2));
+        clearSent();
+
+        rooms.chat(1, 11, "1");
+        rooms.chat(1, 12, "2");
+        rooms.chat(1, 11, "3");
+        rooms.chat(1, 12, "4");
+
+        assertEquals(List.of("1", "2", "3"), chatsTo(2));
+    }
+
+    @Test
+    void 채팅_playerId가_0이나_음수면_서버_안내를_흉내_낼_수_없게_BAD_MESSAGE() {
+        hostAndGuest();
+        clearSent();
+
+        assertCode("BAD_MESSAGE", () -> rooms.chat(1, 0, "공지"));
+        assertCode("BAD_MESSAGE", () -> rooms.chat(1, -11, "공지"));
+
+        assertTrue(sent.isEmpty());
+    }
+
+    @Test
+    void 실패한_캐릭터_팀_선택은_다음_방에_쓰지_않는다() {
+        assertCode("WRONG_STATE", () -> rooms.selectCharacter(1, "kkokko"));
+        assertCode("WRONG_STATE", () -> rooms.selectTeam(1, "PINK"));
+        rooms.create(1, one(1, "가가"), "a", 8, reply(1));
+        JsonNode me = player(last(1, "REPLY"), "가가");
+        assertEquals("sangsangbugi", me.get("character").asText());
+        assertEquals("RED", me.get("team").asText());
+
+        rooms.join(2, one(2, "나나"), 1, reply(2));
+        rooms.selectCharacter(2, "kkukku");
+        rooms.selectTeam(2, "BLUE");
+        rooms.ready(2, true);
+        rooms.startGame(1, reply(1));
+        assertCode("WRONG_STATE", () -> rooms.selectCharacter(2, "sangzzi"));
+        assertCode("WRONG_STATE", () -> rooms.selectTeam(2, "PINK"));
+        games.exit(2);
+        rooms.create(2, one(2, "나나"), "b", 8, reply(2));
+
+        JsonNode guest = player(last(2, "REPLY"), "나나");
+        assertEquals("kkukku", guest.get("character").asText());
+        assertEquals("BLUE", guest.get("team").asText());
+    }
+
+    @Test
+    void 대기실에서_2P_연결이_끊기면_두_사람이_함께_빠진다() {
+        rooms.create(1, one(1, "방장"), "a", 8, reply(1));
+        rooms.join(2, two(2, "가가", "나나"), 1, reply(2));
+        clearSent();
+
+        rooms.disconnect(2);
+
+        assertEquals(List.of("ROOM_STATE", "CHAT_MESSAGE", "CHAT_MESSAGE"), typesTo(1));
+        assertEquals(List.of("가가님이 나갔습니다.", "나나님이 나갔습니다."), chatsTo(1));
+        assertEquals(List.of("방장"), nicknames(last(1, "ROOM_STATE")));
+    }
+
+    @Test
+    void 방장인_2P_연결이_끊기면_두_사람의_퇴장_안내_뒤에_새_방장을_알린다() {
+        rooms.create(1, two(1, "가가", "나나"), "a", 8, reply(1));
+        rooms.join(2, one(2, "다다"), 1, reply(2));
+        clearSent();
+
+        rooms.disconnect(1);
+
+        assertEquals(List.of("가가님이 나갔습니다.", "나나님이 나갔습니다.", "다다님이 방장이 되었습니다."), chatsTo(2));
+        assertEquals(21, last(2, "ROOM_STATE").get("hostId").asLong());
+    }
+
+    @Test
+    void 게임_중에_2P_연결이_나가면_안내만_두_줄이고_경기_뒤_대기실에_없다() {
+        loggedIn.add(9L);
+        rooms.create(1, one(1, "방장"), "a", 8, reply(1));
+        rooms.join(2, two(2, "가가", "나나"), 1, reply(2));
+        rooms.join(3, one(3, "셋째"), 1, reply(3));
+        rooms.selectTeam(2, "BLUE");
+        rooms.selectTeam(3, "GREEN");
+        rooms.ready(2, true);
+        rooms.ready(3, true);
+        rooms.startGame(1, reply(1));
+        clearSent();
+
+        games.exit(2);
+
+        assertEquals(List.of("가가님이 나갔습니다.", "나나님이 나갔습니다."), chatsTo(1));
+        assertFalse(typesTo(1).contains("ROOM_STATE"));
+        assertFalse(typesTo(1).contains("GAME_OVER"));
+        List<Long> left = new ArrayList<>();
+        last(1, "PLAYER_LEFT").get("playerIds").forEach(id -> left.add(id.asLong()));
+        assertEquals(List.of(21L, 22L), left);
+        assertEquals(2, last(9, "LOBBY_ROOMS").at("/rooms/0/players").asInt());
+
+        games.exit(3);
+        assertEquals(List.of("방장"), nicknames(last(1, "ROOM_STATE")));
+    }
+
+    @Test
+    void 맵_변경이_실패하면_아무것도_보내지_않고_맵과_정원이_그대로다() {
+        loggedIn.add(9L);
+        rooms.create(1, one(1, "s0"), "a", 8, reply(1));
+        for (long c = 2; c <= 7; c++) {
+            rooms.join(c, one(c, "s" + (c - 1)), 1, reply(c));
+        }
+        clearSent();
+
+        assertCode("MAP_TOO_SMALL", () -> rooms.changeMap(1, "village/village10", reply(1)));
+        assertCode("MAP_INVALID", () -> rooms.changeMap(1, "nowhere", reply(1)));
+        assertCode("NOT_HOST", () -> rooms.changeMap(2, "random", reply(2)));
+
+        assertTrue(sent.isEmpty());
+        rooms.ready(2, true);
+        JsonNode state = last(1, "ROOM_STATE");
+        assertEquals("camp/camp08", state.at("/room/mapId").asText());
+        assertEquals(8, state.at("/room/capacity").asInt());
+    }
+
+    @Test
+    void 준비_캐릭터_팀_같은_맵_채팅은_로비에_알리지_않는다() {
+        loggedIn.add(9L);
+        hostAndGuest();
+        clearSent();
+
+        rooms.ready(2, true);
+        rooms.selectCharacter(2, "kkukku");
+        rooms.selectTeam(2, "BLUE");
+        rooms.changeMap(1, "camp/camp08", reply(1));
+        rooms.chat(1, 11, "안녕");
+
+        assertTrue(typesTo(9).isEmpty(), typesTo(9).toString());
+    }
+
+    @Test
+    void 방장이_나가면_자리가_가장_작은_2P의_둘째도_방장이_될_수_있다() {
+        rooms.create(1, one(1, "s0"), "a", 8, reply(1));
+        for (long c = 2; c <= 5; c++) {
+            rooms.join(c, one(c, "s" + (c - 1)), 1, reply(c));
+        }
+        rooms.join(7, two(7, "일피", "이피"), 1, reply(7));
+        rooms.leave(2, reply(2));
+        // 정원이 6으로 줄어 slot 6의 이피가 빈 slot 1로 옮겨진다
+        rooms.changeMap(1, "village/village10", reply(1));
+        assertEquals(1, player(last(7, "ROOM_STATE"), "이피").get("slot").asInt());
+        clearSent();
+
+        rooms.leave(1, reply(1));
+
+        assertEquals(72, last(3, "ROOM_STATE").get("hostId").asLong());
+        assertEquals(List.of("s0님이 나갔습니다.", "이피님이 방장이 되었습니다."), chatsTo(3));
+    }
+
+    @Test
+    void GAME_STARTED에는_플레이어마다_고른_캐릭터와_팀과_서로_다른_스폰이_들어간다() {
+        rooms.create(1, one(1, "방장"), "a", 8, reply(1));
+        rooms.join(2, two(2, "가가", "나나"), 1, reply(2));
+        rooms.selectCharacter(1, "kkokko");
+        rooms.selectCharacter(2, "hansungnyangi");
+        rooms.selectTeam(2, "BLUE");
+        rooms.ready(2, true);
+        clearSent();
+
+        rooms.startGame(1, reply(1));
+
+        JsonNode started = last(1, "GAME_STARTED");
+        assertEquals(List.of("mapId", "players"), fieldNames(started));
+        assertTrue(GameMaps.exists(started.get("mapId").asText()));
+        Map<Long, String> seen = new HashMap<>();
+        Set<Integer> spawns = new HashSet<>();
+        for (JsonNode p : started.get("players")) {
+            assertEquals(List.of("playerId", "nickname", "character", "team", "spawn"), fieldNames(p));
+            seen.put(p.get("playerId").asLong(),
+                    p.get("nickname").asText() + "/" + p.get("character").asText() + "/" + p.get("team").asText());
+            int spawn = p.get("spawn").asInt();
+            assertTrue(spawn >= 1 && spawn <= 8, "spawn " + spawn);
+            spawns.add(spawn);
+        }
+        assertEquals(Map.of(11L, "방장/kkokko/RED", 21L, "가가/hansungnyangi/BLUE",
+                22L, "나나/hansungnyangi/BLUE"), seen);
+        assertEquals(3, spawns.size());
+        assertEquals(started, last(2, "GAME_STARTED"));
+    }
+
+    @Test
+    void 로딩_시간_안에_LOADED를_보내지_않은_연결은_방에서도_빠져_로비로_간다() {
+        loggedIn.add(9L);
+        readyToStart();
+        rooms.join(3, one(3, "셋째"), 1, reply(3));
+        rooms.selectTeam(3, "GREEN");
+        rooms.ready(3, true);
+        rooms.startGame(1, reply(1));
+        games.loaded(1);
+        games.loaded(2);
+        clearSent();
+
+        clock.addAndGet(Match.LOAD_TIMEOUT_MS);
+        games.tick();
+
+        assertTrue(typesTo(3).contains("PLAYER_LEFT"));
+        assertEquals(List.of("셋째님이 나갔습니다."), chatsTo(1));
+        assertFalse(typesTo(1).contains("ROOM_STATE"));
+        assertTrue(typesTo(3).contains("LOBBY_ROOMS"));
+        assertEquals(2, last(9, "LOBBY_ROOMS").at("/rooms/0/players").asInt());
+        assertEquals(1, listOf(3).get("rooms").size());
+
+        games.exit(2);
+        assertEquals(List.of("방장"), nicknames(last(1, "ROOM_STATE")));
+    }
+
+    @Test
+    void 아무도_LOADED를_보내지_않으면_모두_로비로_가고_방이_없어진다() {
+        loggedIn.add(9L);
+        readyToStart();
+        rooms.startGame(1, reply(1));
+        clearSent();
+
+        clock.addAndGet(Match.LOAD_TIMEOUT_MS);
+        games.tick();
+
+        assertEquals(0, games.activeMatches());
+        assertEquals("{\"rooms\":[]}", listOf(9).toString());
+        assertEquals("{\"rooms\":[]}", last(1, "LOBBY_ROOMS").toString());
+        assertTrue(sent.stream().noneMatch(s -> s.type().equals("ROOM_STATE")));
+    }
+
+    @Test
+    void 경기가_로딩_시간_초과로_끝나도_대기실에_빠진_사람이_남지_않는다() {
+        readyToStart();
+        rooms.startGame(1, reply(1));
+        games.loaded(1);
+        clearSent();
+
+        clock.addAndGet(Match.LOAD_TIMEOUT_MS);
+        games.tick();
+
+        // 손님이 빠져 RED만 남아 경기가 끝난다. 그 뒤 대기실 상태는 처음부터 방장 혼자다
+        assertEquals(0, games.activeMatches());
+        List<JsonNode> states = roomStatesTo(1);
+        assertFalse(states.isEmpty());
+        states.forEach(state -> assertEquals(List.of("방장"), nicknames(state)));
+        assertEquals("WAITING", states.getLast().at("/room/status").asText());
+    }
+
+    @Test
+    void 없어진_방의_경기가_늦게_끝나도_같은_번호의_새_방을_건드리지_않는다() {
+        readyToStart();
+        rooms.startGame(1, reply(1));
+        rooms.disconnect(1);
+        rooms.disconnect(2);
+        rooms.create(3, one(3, "새방장"), "새 방", 8, reply(3));
+        assertEquals(1, last(3, "REPLY").at("/room/number").asInt());
+        rooms.join(4, one(4, "새손님"), 1, reply(4));
+        rooms.selectTeam(4, "BLUE");
+        rooms.ready(4, true);
+        rooms.startGame(3, reply(3));
+        clearSent();
+
+        games.disconnect(1);
+        games.disconnect(2);
+
+        assertEquals(1, games.activeMatches());
+        assertTrue(sent.stream().noneMatch(s -> s.type().equals("ROOM_STATE") || s.type().equals("LOBBY_ROOMS")));
+        assertCode("ROOM_PLAYING", () -> rooms.join(5, one(5, "늦게"), 1, reply(5)));
+    }
+
+    @Test
+    void 경기가_끝나도_방의_랜덤_맵과_랜덤_캐릭터는_그대로다() {
+        hostAndGuest();
+        rooms.selectCharacter(2, "random");
+        rooms.selectTeam(2, "BLUE");
+        rooms.ready(2, true);
+        rooms.changeMap(1, "random", reply(1));
+        rooms.startGame(1, reply(1));
+        games.loaded(1);
+        games.loaded(2);
+        clock.addAndGet(Match.COUNTDOWN_MS);
+        games.tick();
+        clock.addAndGet(Match.TIME_LIMIT_MS);
+        games.tick();
+
+        assertEquals(0, games.activeMatches());
+        JsonNode state = last(1, "ROOM_STATE");
+        assertEquals("WAITING", state.at("/room/status").asText());
+        assertEquals("random", state.at("/room/mapId").asText());
+        assertEquals("random", player(state, "손님").get("character").asText());
+    }
+
+    @Test
+    void 게임_중에는_방장이_아닌_사람의_시작과_맵_변경도_WRONG_STATE가_먼저다() {
+        readyToStart();
+        rooms.startGame(1, reply(1));
+
+        assertCode("WRONG_STATE", () -> rooms.startGame(2, reply(2)));
+        assertCode("WRONG_STATE", () -> rooms.changeMap(2, "random", reply(2)));
+    }
+
+    @Test
+    void 게임_중인_연결의_로비_요청은_방_안에_있을_때의_오류다() {
+        readyToStart();
+        rooms.startGame(1, reply(1));
+
+        assertCode("WRONG_STATE", () -> rooms.list(2, reply(2)));
+        assertCode("ALREADY_IN_ROOM", () -> rooms.create(2, one(2, "손님"), "b", 8, reply(2)));
+        assertCode("ALREADY_IN_ROOM", () -> rooms.join(2, one(2, "손님"), 1, reply(2)));
+        assertCode("ALREADY_IN_ROOM", () -> rooms.quickJoin(2, one(2, "손님"), reply(2)));
+    }
+
+    @Test
+    void 숫자_경계와_맵_때문에_줄어든_정원() {
+        assertCode("CAPACITY_INVALID", () -> rooms.create(1, one(1, "가가"), "a", -1, reply(1)));
+        rooms.create(1, one(1, "가가"), "a", 8, reply(1));
+        assertCode("ROOM_NOT_FOUND", () -> rooms.join(2, one(2, "나나"), 0, reply(2)));
+        assertCode("ROOM_NOT_FOUND", () -> rooms.join(2, one(2, "나나"), -1, reply(2)));
+
+        rooms.changeMap(1, "village/village10", reply(1));
+        for (long c = 2; c <= 6; c++) {
+            rooms.join(c, one(c, "p" + c), 1, reply(c));
+        }
+        assertCode("ROOM_FULL", () -> rooms.join(7, one(7, "p7"), 1, reply(7)));
+        assertCode("NO_ROOM", () -> rooms.quickJoin(7, one(7, "p7"), reply(7)));
     }
 }

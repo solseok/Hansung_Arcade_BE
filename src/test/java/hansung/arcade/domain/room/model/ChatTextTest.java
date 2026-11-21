@@ -3,6 +3,8 @@ package hansung.arcade.domain.room.model;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 클라이언트 {@code ChatMessage.clean}·{@code byteLength}와 같은 결과를 내는지 확인한다.
@@ -34,6 +36,48 @@ class ChatTextTest {
         assertEquals("ab", ChatText.clean("a\uD800b"));
         assertEquals("ab", ChatText.clean("a\uDC00b"));
         assertEquals("a😀b", ChatText.clean("a😀b"));
+    }
+
+    @Test
+    void 클라이언트와_같게_빈칸으로_보이는_글자뿐인_글은_빈_글이다() {
+        assertEquals("", ChatText.clean("\u3164"));
+        assertEquals("", ChatText.clean("\u200B\u200B"));
+        assertEquals("", ChatText.clean("\u00A0 \u3164"));
+        assertEquals("", ChatText.clean("\u00A0"));
+        assertEquals("", ChatText.clean("\u2007\u202F"));
+        assertEquals("", ChatText.clean(" \n\t "));
+        assertEquals("가 나", ChatText.clean("\u3164가 나\u00A0"));
+    }
+
+    @Test
+    void 클라이언트와_같게_줄_구분과_글자_방향을_바꾸는_글자를_남기지_않는다() {
+        assertEquals("abc", ChatText.clean("a\u202Eb\u200Bc"));
+        assertEquals("ab", ChatText.clean("a\uD83Db"));
+        assertEquals("안녕 하세요", ChatText.clean("  안녕\n하세요\t "));
+    }
+
+    @Test
+    void 다듬는_순서는_합치기_한_줄로_앞뒤_떼기_자르기_끝_떼기다() {
+        // 앞 빈칸을 먼저 떼고 나서 64를 센다
+        assertEquals("a".repeat(64), ChatText.clean("  " + "a".repeat(64)));
+        assertEquals("a".repeat(64), ChatText.clean("\n\t" + "a".repeat(64)));
+        // 풀어쓴 한글을 먼저 합치고 나서 센다 (합치기 전이면 한 글자가 6바이트)
+        assertEquals("한".repeat(32), ChatText.clean("\u1112\u1161\u11AB".repeat(33)));
+        // 이모지가 정확히 64에서 끝나면 넣는다
+        assertEquals("a".repeat(60) + "😀", ChatText.clean("a".repeat(60) + "😀b"));
+    }
+
+    @Test
+    void 앞뒤_빈칸_떼기와_빈칸_판정을_방_제목에도_쓴다() {
+        assertEquals("제목", ChatText.stripBlank("\u3000\u3164제목\u00A0 "));
+        assertEquals("가 나", ChatText.stripBlank(" 가 나 "));
+        assertEquals("", ChatText.stripBlank("\u2800 "));
+        assertTrue(ChatText.isBlank(' '));
+        assertTrue(ChatText.isBlank(0x00A0));
+        assertTrue(ChatText.isBlank(0x3164));
+        assertTrue(ChatText.isBlank(0x2800));
+        assertFalse(ChatText.isBlank('a'));
+        assertFalse(ChatText.isBlank(0x200D));
     }
 
     @Test

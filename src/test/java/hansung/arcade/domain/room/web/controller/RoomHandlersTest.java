@@ -24,6 +24,7 @@ import java.util.Collection;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -111,7 +112,7 @@ class RoomHandlersTest {
     }
 
     @Test
-    void 성공_응답을_보낸_뒤_오류가_나도_같은_id에_실패_응답을_또_보내지_않는다() throws IOException {
+    void 성공_응답을_보낸_뒤_오류가_나면_같은_id로_또_답하지_않고_ERROR_푸시로_알린다() throws IOException {
         start(true);
         try (Client client = new Client()) {
             client.send("{\"type\":\"LOGIN\",\"id\":1,\"body\":{\"nicknames\":[\"가가\"]}}");
@@ -123,6 +124,11 @@ class RoomHandlersTest {
             JsonNode created = client.receive();
             assertEquals("ROOM_CREATE", created.get("type").asText());
             assertTrue(created.get("ok").asBoolean());
+            JsonNode error = client.receive();
+            assertEquals("ERROR", error.get("type").asText(), error.toString());
+            assertFalse(error.has("id"));
+            assertEquals("SERVER_ERROR", error.at("/body/code").asText());
+            assertEquals("ROOM_CREATE", error.at("/body/type").asText());
             JsonNode next = client.receive();
             assertEquals("PING", next.get("type").asText(), next.toString());
         }

@@ -2,7 +2,10 @@ package hansung.arcade.domain.game.model;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -41,5 +44,20 @@ class GameMapsTest {
         assertEquals(6, GameMaps.maxPlayers("village/village10"));
         assertThrows(IllegalArgumentException.class, () -> GameMaps.maxPlayers("random"));
         assertThrows(IllegalArgumentException.class, () -> GameMaps.capacityOf("nowhere"));
+    }
+
+    @Test
+    void 랜덤_맵은_인원이_들어가는_맵에서만_고른다() {
+        for (int seed = 0; seed < 200; seed++) {
+            String seven = GameMaps.pick(7, new Random(seed));
+            assertTrue(Set.of("camp/camp08", "patrit/patrit14").contains(seven), seven);
+            assertTrue(GameMaps.exists(GameMaps.pick(2, new Random(seed))));
+        }
+        Set<String> picked = new HashSet<>();
+        for (int seed = 0; seed < 200; seed++) {
+            picked.add(GameMaps.pick(6, new Random(seed)));
+        }
+        assertEquals(Set.of("camp/camp08", "patrit/patrit14", "village/village10"), picked);
+        assertThrows(IllegalArgumentException.class, () -> GameMaps.pick(9, new Random(1)));
     }
 }

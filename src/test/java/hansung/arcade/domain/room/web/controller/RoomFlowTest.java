@@ -54,6 +54,7 @@ class RoomFlowTest {
         RoomService roomService = new RoomService(roomConnections, gameService, clock::get);
         gameService.onFinished(match -> roomService.finishGame(match.matchId()));
         gameService.onExit(roomService::exitGame);
+        gameService.onDropped(roomService::exitGame);
 
         MessageDispatcher dispatcher = new MessageDispatcher();
         dispatcher.register(LoginHandler.TYPE, new LoginHandler(sessionService));
@@ -243,7 +244,7 @@ class RoomFlowTest {
     void BAD_MESSAGE_안내는_어느_필드가_틀렸는지_알려_준다() throws IOException {
         try (Client client = new Client("가가")) {
             String[][] requests = {
-                    {"ROOM_CREATE", "{\"capacity\":4}", "title는 문자열이어야 합니다."},
+                    {"ROOM_CREATE", "{\"capacity\":4}", "title은 문자열이어야 합니다."},
                     {"ROOM_CREATE", "{\"title\":\"a\",\"capacity\":\"4\"}", "capacity는 정수여야 합니다."},
                     {"ROOM_JOIN", "{\"roomNumber\":\"1\"}", "roomNumber는 정수여야 합니다."}};
             for (String[] request : requests) {
@@ -256,7 +257,7 @@ class RoomFlowTest {
                     {"CHANGE_MAP", "{}", "mapId는 문자열이어야 합니다."},
                     {"READY", "{\"ready\":1}", "ready는 true나 false여야 합니다."},
                     {"SELECT_CHARACTER", "{}", "character는 문자열이어야 합니다."},
-                    {"SELECT_TEAM", "{}", "team는 문자열이어야 합니다."},
+                    {"SELECT_TEAM", "{}", "team은 문자열이어야 합니다."},
                     {"CHAT", "{\"text\":1}", "text는 문자열이어야 합니다."},
                     {"CHAT", "{\"text\":\"a\",\"playerId\":\"1\"}", "playerId는 정수여야 합니다."},
                     {"CHAT", "{\"playerId\":\"x\"}", "playerId는 정수여야 합니다."}};
@@ -293,6 +294,118 @@ class RoomFlowTest {
             assertEquals("게임을 시작하지 못했습니다. 다시 시도해 주세요.",
                     host.next("CHAT_MESSAGE").at("/body/text").asText());
             assertEquals(7, host.next("PING").get("id").asInt());
+        }
+    }
+
+    @Test
+    void 로그인하지_않은_연결은_LOBBY_ROOMS를_받지_않는다() throws IOException {
+        try (Client stranger = new Client(); Client host = new Client("방장")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            host.next("ROOM_CREATE");
+
+            stranger.send("{\"type\":\"PING\",\"id\":1,\"body\":{}}");
+
+            assertEquals(1, stranger.next("PING").get("id").asInt());
+        }
+    }
+
+    @Test
+    void 바로_시작은_응답_뒤_안내가_오고_들어갈_방이_없으면_NO_ROOM이다() throws IOException {
+        try (Client host = new Client("방장")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":2}}");
+            host.next("ROOM_CREATE");
+            try (Client guest = new Client("손님"); Client late = new Client("늦게")) {
+                guest.send("{\"type\":\"ROOM_QUICK_JOIN\",\"id\":5,\"body\":{}}");
+                JsonNode joined = guest.next("ROOM_QUICK_JOIN");
+                assertTrue(joined.get("ok").asBoolean());
+                assertEquals(5, joined.get("id").asInt());
+                assertEquals(1, joined.at("/body/room/number").asInt());
+                assertEquals("손님님이 들어왔습니다.", guest.next("CHAT_MESSAGE").at("/body/text").asText());
+
+                late.receive("LOBBY_ROOMS");
+                late.send("{\"type\":\"ROOM_QUICK_JOIN\",\"id\":6,\"body\":{}}");
+                JsonNode refused = late.receive("ROOM_QUICK_JOIN");
+                assertEquals(6, refused.get("id").asInt());
+                assertEquals("NO_ROOM", refused.at("/error/code").asText());
+                assertEquals("입장 가능한 방이 없습니다.", refused.at("/error/message").asText());
+            }
+        }
+    }
+
+    @Test
+    void int를_넘는_방_번호는_잘라_읽지_않고_BAD_MESSAGE다() throws IOException {
+        try (Client host = new Client("방장"); Client guest = new Client("손님")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            host.next("ROOM_CREATE");
+            guest.receive("LOBBY_ROOMS");
+
+            guest.send("{\"type\":\"ROOM_JOIN\",\"id\":3,\"body\":{\"roomNumber\":4294967297}}");
+
+            JsonNode response = guest.next("ROOM_JOIN");
+            assertEquals("BAD_MESSAGE", response.at("/error/code").asText());
+            assertEquals("roomNumber는 정수여야 합니다.", response.at("/error/message").asText());
+            host.send("{\"type\":\"PING\",\"id\":4,\"body\":{}}");
+            assertEquals(4, host.next("PING").get("id").asInt());
+        }
+    }
+
+    @Test
+    void 채팅_playerId_0은_서버_안내를_흉내_낼_수_없다() throws IOException {
+        try (Client host = new Client("방장")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            host.next("ROOM_CREATE");
+
+            host.send("{\"type\":\"CHAT\",\"body\":{\"playerId\":0,\"text\":\"공지\"}}");
+            host.send("{\"type\":\"PING\",\"id\":3,\"body\":{}}");
+
+            assertEquals("BAD_MESSAGE", host.next("ERROR").at("/body/code").asText());
+            assertEquals(3, host.next("PING").get("id").asInt());
+        }
+    }
+
+    @Test
+    void 값이_null인_필드는_없는_것과_같고_모르는_필드는_무시한다() throws IOException {
+        try (Client client = new Client("가가")) {
+            for (String body : List.of("{\"roomNumber\":null}")) {
+                client.send("{\"type\":\"ROOM_JOIN\",\"id\":2,\"body\":" + body + "}");
+                assertEquals("BAD_MESSAGE", client.next("ROOM_JOIN").at("/error/code").asText(), body);
+            }
+            client.send("{\"type\":\"ROOM_CREATE\",\"id\":3,\"body\":{\"title\":\"a\",\"capacity\":null}}");
+            assertEquals("BAD_MESSAGE", client.next("ROOM_CREATE").at("/error/code").asText());
+
+            client.send("{\"type\":\"ROOM_CREATE\",\"id\":4,\"body\":{\"title\":\"a\",\"capacity\":4,\"extra\":[1]}}");
+            assertTrue(client.next("ROOM_CREATE").get("ok").asBoolean());
+        }
+    }
+
+    @Test
+    void id_없는_요청이_실패하면_ERROR_푸시에_원인_type을_담는다() throws IOException {
+        try (Client client = new Client("가가")) {
+            client.send("{\"type\":\"ROOM_JOIN\",\"body\":{\"roomNumber\":42}}");
+
+            JsonNode error = client.next("ERROR");
+            assertEquals("ROOM_NOT_FOUND", error.at("/body/code").asText());
+            assertEquals("ROOM_JOIN", error.at("/body/type").asText());
+        }
+    }
+
+    @Test
+    void BYE로_나가도_끊긴_것과_같게_방에서_빼고_로비에_알린다() throws IOException {
+        try (Client host = new Client("방장"); Client guest = new Client("손님"); Client lobby = new Client("구경")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            host.next("ROOM_CREATE");
+            guest.send("{\"type\":\"ROOM_JOIN\",\"id\":3,\"body\":{\"roomNumber\":1}}");
+            guest.receive("ROOM_JOIN");
+            host.next("ROOM_STATE");
+            host.next("CHAT_MESSAGE");
+            lobby.receive("LOBBY_ROOMS");
+            assertEquals(2, lobby.next("LOBBY_ROOMS").at("/body/rooms/0/players").asInt());
+
+            guest.send("{\"type\":\"BYE\",\"body\":{}}");
+
+            assertEquals(1, host.next("ROOM_STATE").at("/body/players").size());
+            assertEquals("손님님이 나갔습니다.", host.next("CHAT_MESSAGE").at("/body/text").asText());
+            assertEquals(1, lobby.next("LOBBY_ROOMS").at("/body/rooms/0/players").asInt());
         }
     }
 
