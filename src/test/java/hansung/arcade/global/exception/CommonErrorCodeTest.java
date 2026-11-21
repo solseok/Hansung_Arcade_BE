@@ -12,5 +12,6 @@ class CommonErrorCodeTest {
         assertEquals(ErrorCode.BAD_MESSAGE.name(), CommonErrorCode.BAD_MESSAGE);
         assertEquals(ErrorCode.NOT_LOGGED_IN.name(), CommonErrorCode.NOT_LOGGED_IN);
         assertEquals(ErrorCode.WRONG_STATE.name(), CommonErrorCode.WRONG_STATE);
+        assertEquals(ErrorCode.NOT_HOST.name(), CommonErrorCode.NOT_HOST);
     }
 }
