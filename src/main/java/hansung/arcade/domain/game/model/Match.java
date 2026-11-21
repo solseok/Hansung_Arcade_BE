@@ -52,8 +52,8 @@ public final class Match {
     public static final long COUNTDOWN_MS = 3_000;
     /** 경기 제한 시간 (카운트다운이 끝난 때부터). 값은 검토 중 */
     public static final long TIME_LIMIT_MS = 180_000;
-    /** 물풍선이 놓인 뒤 터지기까지 */
-    public static final long FUSE_MS = 3_000;
+    /** 물풍선이 놓인 뒤 터지기까지 (클라이언트 WaterBalloon.FUSE_SECONDS) */
+    public static final long FUSE_MS = 2_000;
     /** 물줄기가 남아 있는 시간. 이 동안 그 칸에 들어온 플레이어도 갇힌다 (클라이언트 Explosion.SECONDS) */
     public static final long FLAME_MS = 450;
     /** 갇힌 뒤 구해지지 않으면 터지기까지 */
