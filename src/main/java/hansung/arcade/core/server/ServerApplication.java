@@ -6,6 +6,7 @@ import hansung.arcade.core.boot.BootStep;
 import hansung.arcade.core.boot.DispatcherStep;
 import hansung.arcade.core.boot.PropertiesStep;
 import hansung.arcade.core.boot.ServerSocketStep;
+import hansung.arcade.core.boot.ServiceStep;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,6 +54,7 @@ public final class ServerApplication {
     static List<BootStep> defaultSteps() {
         return List.of(
                 new PropertiesStep(),
+                new ServiceStep(),
                 new DispatcherStep(),
                 new ServerSocketStep(),
                 new AcceptStep());

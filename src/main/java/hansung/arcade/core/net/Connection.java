@@ -32,6 +32,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>끊는 길은 여러 가지지만(BYE, 상대가 닫음, 15초 무응답, 오류, 서버 종료) 정리는 {@link #close}에서
  * 한 번만 하고, {@link ConnectionListener#onClose}도 한 번만 부른다.</p>
+ *
+ * <p>{@link #send}를 부른 스레드에서는 리스너를 부르지 않는다. 방·경기 lock을 잡은 채 보내다 큐가 넘쳐도
+ * 끊김 정리(세션·방 lock)는 다른 스레드에서 돌므로 lock 순서가 엇갈리지 않는다.</p>
  */
 public final class Connection {
 
@@ -49,6 +52,7 @@ public final class Connection {
     private final List<ConnectionListener> listeners;
     private final BlockingQueue<String> outbox = new LinkedBlockingQueue<>(MAX_QUEUED_MESSAGES + 1);
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean overflowed = new AtomicBoolean();
     private final Map<Class<?>, Object> attachments = new ConcurrentHashMap<>();
 
     Connection(long id, Socket socket, MessageDispatcher dispatcher, List<ConnectionListener> listeners) {
@@ -87,16 +91,20 @@ public final class Connection {
     /**
      * 송신 큐에 넣는다. 바로 돌아오고, 실제로 쓰는 것은 보내는 스레드다.
      *
-     * 상대가 읽지 않아 큐가 {@value #MAX_QUEUED_MESSAGES}개를 넘으면 연결을 끊는다.
+     * 상대가 읽지 않아 큐가 {@value #MAX_QUEUED_MESSAGES}개를 넘으면 연결을 끊는다. 끊는 것(리스너 호출 포함)은
+     * 다른 스레드에서 하므로, 부른 쪽이 잡고 있는 lock 안에서 끊김 정리가 돌지 않는다.
      *
-     * @return 이미 닫혀서 버렸으면 false
+     * @return 이미 닫혔거나 큐가 넘쳐 버렸으면 false
      */
     public boolean send(Message message) {
-        if (closed.get()) {
+        if (closed.get() || overflowed.get()) {
             return false;
         }
         if (outbox.size() >= MAX_QUEUED_MESSAGES || !outbox.offer(message.toJson())) {
-            close("송신 큐가 가득 참 (상대가 메시지를 읽지 않음)");
+            if (overflowed.compareAndSet(false, true)) {
+                Thread.ofVirtual().name("conn-" + id + "-overflow")
+                        .start(() -> close("송신 큐가 가득 참 (상대가 메시지를 읽지 않음)"));
+            }
             return false;
         }
         return true;
