@@ -382,7 +382,8 @@ public final class Match {
                         String.valueOf(map.tileAt(cell.col(), cell.row()).symbol())));
             }
         }
-        // 아이템 API를 만들기 전까지 items·removedItems는 늘 비어 있다
+        // 아이템 API를 만들기 전까지 items·removedItems는 늘 비어 있다.
+        // 그때 다 부서진(바닥이 드러난) 블럭은 map.fixedDrop(...)이 있으면 그 아이템을, 없으면 확률로 정한 아이템을 떨어뜨린다
         events.add(toAll(MatchMessages.BALLOON_EXPLODED, new BalloonExploded(exploded, tiles, List.of(), List.of())));
 
         for (MatchPlayer player : players.values()) {
