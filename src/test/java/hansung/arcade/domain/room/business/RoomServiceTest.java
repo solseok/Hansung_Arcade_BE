@@ -43,6 +43,8 @@ class RoomServiceTest {
     private final Set<Long> loggedIn = new HashSet<>();
     /** 끊겼지만 아직 끊김 정리가 돌지 않은 연결 */
     private final Set<Long> closed = new HashSet<>();
+    /** true면 경기 쪽 연결 확인이 예기치 못한 예외를 던진다 (경기를 여는 도중의 오류 흉내) */
+    private boolean gameSenderBroken;
     private GameService games;
     private RoomService rooms;
 
@@ -56,6 +58,9 @@ class RoomServiceTest {
 
             @Override
             public boolean isConnected(long connectionId) {
+                if (gameSenderBroken) {
+                    throw new IllegalStateException("경기 쪽 오류");
+                }
                 return !closed.contains(connectionId);
             }
         }, clock::get, new Random(7));
@@ -269,7 +274,11 @@ class RoomServiceTest {
         rooms.create(1, one(1, "가가"), "\u1112\u1161\u11AB".repeat(30), 8, reply(1));
         assertEquals("한".repeat(30), last(1, "REPLY").at("/room/title").asText());
 
-        for (String title : List.of("줄\n바꿈", "탭\t글", "폭\u200B없음", "\u200B", "제어\u0007", "줄\u2028구분")) {
+        rooms.create(3, one(3, "다다"), "\t앞뒤 공백 문자\n", 8, reply(3));
+        assertEquals("앞뒤 공백 문자", last(3, "REPLY").at("/room/title").asText());
+
+        for (String title : List.of("줄\n바꿈", "탭\t글", "폭\u200B없음", "\u200B", "제어\u0007", "줄\u2028구분",
+                "a\uD800", "\uDC00b")) {
             assertCode("TITLE_INVALID", () -> rooms.create(2, one(2, "나나"), title, 8, reply(2)));
         }
     }
@@ -1348,10 +1357,14 @@ class RoomServiceTest {
         closed.add(2L);
         clearSent();
 
+        loggedIn.add(9L);
         rooms.startGame(1, reply(1));
 
         assertEquals(0, games.activeMatches());
         assertEquals("WAITING", last(1, "ROOM_STATE").at("/room/status").asText());
+        // 끝난 경기를 로비에 게임 중으로 알리지 않는다
+        assertEquals(List.of("LOBBY_ROOMS"), typesTo(9));
+        assertEquals("WAITING", last(9, "LOBBY_ROOMS").at("/rooms/0/status").asText());
         rooms.disconnect(1);
         rooms.disconnect(2);
         assertEquals("{\"rooms\":[]}", Json.MAPPER.valueToTree(rooms.list(9)).toString());
@@ -1468,6 +1481,57 @@ class RoomServiceTest {
         // 로비에는 게임 중이라고 알린 적이 없다
         assertTrue(typesTo(9).isEmpty());
         assertEquals("WAITING", Json.MAPPER.valueToTree(rooms.list(9)).at("/rooms/0/status").asText());
+    }
+
+    @Test
+    void 시작하자마자_한_팀만_남아_끝나도_로비에는_대기_중으로만_알린다() {
+        loggedIn.add(9L);
+        readyToStart();
+        clearSent();
+        closed.add(2L);
+
+        rooms.startGame(1, reply(1));
+
+        assertEquals(0, games.activeMatches());
+        assertEquals(List.of("LOBBY_ROOMS"), typesTo(9));
+        assertEquals("WAITING", last(9, "LOBBY_ROOMS").at("/rooms/0/status").asText());
+        assertEquals("WAITING", last(1, "ROOM_STATE").at("/room/status").asText());
+    }
+
+    @Test
+    void 경기를_여는_도중_어떤_오류가_나도_대기실로_되돌린다() {
+        readyToStart();
+        clearSent();
+        gameSenderBroken = true;
+
+        rooms.startGame(1, reply(1));
+        gameSenderBroken = false;
+
+        assertEquals(1, to(1).stream().filter(s -> s.type().equals("REPLY")).count());
+        assertEquals("WAITING", last(1, "ROOM_STATE").at("/room/status").asText());
+        assertEquals("게임을 시작하지 못했습니다. 다시 시도해 주세요.", last(2, "CHAT_MESSAGE").get("text").asText());
+        rooms.leave(2, reply(2));
+        assertEquals(List.of("방장"), nicknames(last(1, "ROOM_STATE")));
+    }
+
+    @Test
+    void 방장은_playerId로_정해져_2P가_더_작은_자리로_옮겨도_그대로다() {
+        rooms.create(1, one(1, "가가"), "a", 8, reply(1));
+        for (long c = 2; c <= 5; c++) {
+            rooms.join(c, one(c, "p" + c), 1, reply(c));
+        }
+        rooms.join(7, two(7, "일피", "이피"), 1, reply(7));
+        for (long c = 2; c <= 5; c++) {
+            rooms.leave(c, reply(c));
+        }
+        rooms.leave(1, reply(1));
+        assertEquals(71, last(7, "ROOM_STATE").get("hostId").asLong());
+
+        rooms.changeMap(7, "village/village10", reply(7));
+
+        JsonNode state = last(7, "ROOM_STATE");
+        assertEquals(0, player(state, "이피").get("slot").asInt());
+        assertEquals(71, state.get("hostId").asLong());
     }
 
     @Test

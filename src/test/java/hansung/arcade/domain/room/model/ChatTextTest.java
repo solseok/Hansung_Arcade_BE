@@ -37,6 +37,11 @@ class ChatTextTest {
     }
 
     @Test
+    void null은_빈_글이다() {
+        assertEquals("", ChatText.clean(null));
+    }
+
+    @Test
     void 서식_문자는_지운다() {
         assertEquals("ab", ChatText.clean("a​b"));
         assertEquals("ab", ChatText.clean("a‮b"));

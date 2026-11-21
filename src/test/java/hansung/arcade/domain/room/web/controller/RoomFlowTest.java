@@ -258,7 +258,8 @@ class RoomFlowTest {
                     {"SELECT_CHARACTER", "{}", "character는 문자열이어야 합니다."},
                     {"SELECT_TEAM", "{}", "team는 문자열이어야 합니다."},
                     {"CHAT", "{\"text\":1}", "text는 문자열이어야 합니다."},
-                    {"CHAT", "{\"text\":\"a\",\"playerId\":\"1\"}", "playerId는 정수여야 합니다."}};
+                    {"CHAT", "{\"text\":\"a\",\"playerId\":\"1\"}", "playerId는 정수여야 합니다."},
+                    {"CHAT", "{\"playerId\":\"x\"}", "playerId는 정수여야 합니다."}};
             for (String[] push : pushes) {
                 client.send("{\"type\":\"" + push[0] + "\",\"body\":" + push[1] + "}");
                 assertEquals(push[2], client.next("ERROR").at("/body/message").asText(), push[0]);

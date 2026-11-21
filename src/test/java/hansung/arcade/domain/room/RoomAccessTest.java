@@ -140,6 +140,15 @@ class RoomAccessTest {
     }
 
     @Test
+    void RoomMessages의_공개_필드는_푸시_type_상수뿐이다() {
+        Set<String> fields = Arrays.stream(RoomMessages.class.getDeclaredFields())
+                .filter(field -> Modifier.isPublic(field.getModifiers()))
+                .map(Field::getName)
+                .collect(Collectors.toCollection(TreeSet::new));
+        assertEquals(new TreeSet<>(Set.of("ROOM_STATE", "LOBBY_ROOMS", "CHAT_MESSAGE")), fields);
+    }
+
+    @Test
     void RoomSender의_연결_확인은_구현이_반드시_정한다() throws NoSuchMethodException {
         assertFalse(RoomSender.class.getMethod("isConnected", long.class).isDefault());
     }

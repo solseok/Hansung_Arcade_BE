@@ -80,6 +80,14 @@ class RoomTest {
     }
 
     @Test
+    void 플레이어_없이_앉힐_수_없다() {
+        Room room = new Room(1, "a", 8);
+
+        assertThrows(IllegalArgumentException.class, () -> room.seat(100, List.of(), "kkukku", Team.RED));
+        assertTrue(room.isEmpty());
+    }
+
+    @Test
     void 자리가_모자라면_앉힐_수_없다() {
         Room room = new Room(1, "a", 2);
         room.seat(100, players(1), "kkukku", Team.RED);
