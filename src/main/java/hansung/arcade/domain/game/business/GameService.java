@@ -186,11 +186,14 @@ public final class GameService {
     /**
      * GAME_EXIT. 이 연결의 플레이어가 경기에서 나간다.
      *
-     * @throws GameException 경기 중이 아니면 WRONG_STATE
+     * @throws GameException 경기 중이 아니면 WRONG_STATE. 확인한 직후 타이머가 경기를 끝낸 경우도 포함한다
      */
     public void exit(long connectionId) {
         Match match = requireMatch(connectionId);
         synchronized (match) {
+            if (!match.includes(connectionId)) {
+                throw new GameException(WRONG_STATE, "게임 중이 아닙니다.");
+            }
             deliver(match, match.leave(connectionId, "EXIT", false, clock.getAsLong()));
         }
         notifyIfFinished(match);
@@ -238,8 +241,8 @@ public final class GameService {
     /**
      * 경기 lock 안에서 부른다. 푸시를 보내고, 경기에서 빠진 연결과 끝난 경기를 정리한다.
      *
-     * <p>주의: 송신 큐가 넘치면 {@code Connection}이 이 스레드에서 끊김 리스너를 부른다. 그래서 경기 lock → 세션 lock
-     * 순서가 생긴다. 세션·방 lock을 잡은 채 경기 메서드를 부르지 않는다.</p>
+     * <p>{@code Connection.send}는 송신 큐가 넘쳐도 끊김 리스너를 이 스레드에서 부르지 않는다. 그래서 경기 lock 안에서
+     * 보내도 세션·방 lock을 잡지 않는다.</p>
      */
     private void deliver(Match match, List<MatchEvent> events) {
         for (MatchEvent event : events) {

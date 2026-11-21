@@ -18,7 +18,9 @@ import hansung.arcade.global.exception.GameException;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -31,7 +33,7 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * 경기 한 판. 맵 사본, 플레이어 상태, 물풍선·물줄기를 들고 인게임 규칙을 판정한다.
  *
  * <p>네트워크를 모른다. 메서드마다 보내야 할 푸시를 {@link MatchEvent} 목록으로 돌려주고, 보내는 것은 부른 쪽이
- * lock 밖에서 한다. 시간은 밖에서 받은 ms 값({@code now})만 쓰므로 테스트에서 시계를 마음대로 돌릴 수 있다.</p>
+ * 한다. 시간은 밖에서 받은 ms 값({@code now})만 쓰므로 테스트에서 시계를 마음대로 돌릴 수 있다.</p>
  *
  * <pre>
  * GAME_STARTED → (모든 연결 LOADED 또는 {@link #LOAD_TIMEOUT_MS}) → ROUND_BEGIN
@@ -56,6 +58,10 @@ public final class Match {
     public static final long FLAME_MS = 450;
     /** 갇힌 뒤 구해지지 않으면 터지기까지 */
     public static final long POP_MS = 5_000;
+    /** 구해진 뒤 빠져나오는 시간. 이 동안은 다시 갇히지 않는다 (클라이언트 Player.ESCAPE_SECONDS) */
+    public static final long ESCAPE_MS = 500;
+    /** 갇힌 뒤 적어도 이만큼(타이머 한 번)은 구해지거나 터지지 않는다. 갇힌 모습이 한 번은 보이도록 한다 */
+    static final long MIN_TRAPPED_MS = 20;
     /** 두 캐릭터 중심이 가로·세로 모두 이보다 가까우면 닿은 것 (클라이언트 Player.TOUCH_DISTANCE) */
     static final double TOUCH_DISTANCE = GameMap.TILE_SIZE / 2.0;
 
@@ -105,6 +111,11 @@ public final class Match {
         return List.copyOf(connections);
     }
 
+    /** 이 연결이 아직 끝나지 않은 경기에 남아 있는지 */
+    public synchronized boolean includes(long connectionId) {
+        return phase != Phase.FINISHED && connections.contains(connectionId);
+    }
+
     /** 플레이어 상태. 경기 lock 밖에서 읽으면 값이 어긋날 수 있으니 확인·로그용으로만 쓴다 */
     public synchronized MatchPlayer player(long playerId) {
         return players.get(playerId);
@@ -139,6 +150,7 @@ public final class Match {
      */
     public synchronized List<MatchEvent> move(long connectionId, long playerId, double x, double y, Facing facing,
                                               boolean moving, long now) {
+        startPlayIfDue(now);
         if (phase != Phase.PLAYING || facing == null || !Double.isFinite(x) || !Double.isFinite(y)
                 || x < 0 || y < 0 || x >= map.pixelWidth() || y >= map.pixelHeight()) {
             return List.of();
@@ -152,35 +164,44 @@ public final class Match {
         List<MatchEvent> events = new ArrayList<>();
         events.add(new MatchEvent(othersThan(connectionId), MatchMessages.PLAYER_MOVED,
                 new PlayerMoved(playerId, x, y, facing.name(), moving)));
-        if (mover.state() == MatchPlayer.State.ALIVE) {
-            trapIfWet(mover, now, events);
-        }
-        resolveTouches(mover, events);
+        trapIfWet(mover, now, events);
+        settleTouches(now, events);
         finishIfDecided(events);
         return events;
     }
 
     /**
      * BALLOON_PLACE. 놓을 수 없으면 조용히 버린다.
-     * 살아 있고 갇히지 않음, 마지막 MOVE 칸에서 한 칸 이내, 지나갈 수 있는 빈 칸, 놓아 둔 수가 능력치보다 적음.
+     * 살아 있고 갇히지 않음, 마지막 MOVE 칸이나 그 상하좌우 칸(통신 지연 여유), 지나갈 수 있는 빈 칸,
+     * 놓아 둔 수가 능력치보다 적음. 물줄기가 남은 칸에 놓으면 바로 터진다 (클라이언트 BalloonField.place와 같다).
      */
     public synchronized List<MatchEvent> placeBalloon(long connectionId, long playerId, int col, int row, long now) {
+        startPlayIfDue(now);
         if (phase != Phase.PLAYING) {
             return List.of();
         }
         MatchPlayer owner = ownPlayer(connectionId, playerId);
         Cell cell = new Cell(col, row);
-        if (owner == null || owner.state() != MatchPlayer.State.ALIVE
+        if (owner == null || !owner.isFree(now)
                 || owner.cell().distanceTo(cell) > 1
                 || map.isSolid(col, row) || balloonAt(cell) != null
                 || owner.placedBalloons() >= owner.balloonCapacity()) {
             return List.of();
         }
-        Balloon balloon = new Balloon(++lastBalloonId, owner.playerId(), cell, owner.waterRange(), now + FUSE_MS);
+        boolean wet = flameAt(cell, now) != null;
+        long fuseMs = wet ? 0 : FUSE_MS;
+        Balloon balloon = new Balloon(++lastBalloonId, owner.playerId(), cell, owner.waterRange(), now + fuseMs);
         balloons.add(balloon);
         owner.balloonPlaced();
-        return List.of(toAll(MatchMessages.BALLOON_PLACED, new BalloonPlaced(balloon.balloonId(), owner.playerId(),
-                col, row, balloon.range(), FUSE_MS)));
+        List<MatchEvent> events = new ArrayList<>();
+        events.add(toAll(MatchMessages.BALLOON_PLACED, new BalloonPlaced(balloon.balloonId(), owner.playerId(),
+                col, row, balloon.range(), fuseMs)));
+        if (wet) {
+            // 갇힌 사람의 닿음 판정은 MIN_TRAPPED_MS 뒤에 한다
+            explodeDueBalloons(now, events);
+            finishIfDecided(events);
+        }
+        return events;
     }
 
     /**
@@ -253,14 +274,11 @@ public final class Match {
                     dropUnloaded(now, events);
                 }
             }
-            case COUNTDOWN -> {
-                if (now >= playStartsAt) {
-                    phase = Phase.PLAYING;
-                }
-            }
+            case COUNTDOWN -> startPlayIfDue(now);
             case PLAYING -> {
                 explodeDueBalloons(now, events);
                 flames.removeIf(flame -> flame.until() <= now);
+                settleTouches(now, events);
                 for (MatchPlayer player : players.values()) {
                     if (player.state() == MatchPlayer.State.TRAPPED && player.trappedUntil() <= now) {
                         pop(player, null, events);
@@ -277,6 +295,16 @@ public final class Match {
         return events;
     }
 
+    /**
+     * 카운트다운이 끝났으면 PLAYING으로 넘긴다. tick만 기다리면 카운트다운 직후 첫 입력이 최대 한 tick 동안 버려지므로
+     * 입력을 받을 때도 부른다.
+     */
+    private void startPlayIfDue(long now) {
+        if (phase == Phase.COUNTDOWN && now >= playStartsAt) {
+            phase = Phase.PLAYING;
+        }
+    }
+
     private void beginRoundIfAllLoaded(long now, List<MatchEvent> events) {
         if (phase != Phase.LOADING || !loaded.containsAll(connections)) {
             return;
@@ -287,11 +315,18 @@ public final class Match {
         events.add(toAll(MatchMessages.ROUND_BEGIN, new RoundBegin(COUNTDOWN_MS, TIME_LIMIT_MS)));
     }
 
-    /** 터질 때가 된 물풍선을 연쇄까지 한꺼번에 터뜨려 BALLOON_EXPLODED 하나로 알리고, 물줄기에 있는 플레이어를 가둔다 */
+    /**
+     * 터질 때가 된 물풍선을 연쇄까지 한꺼번에 터뜨려 BALLOON_EXPLODED 하나로 알리고, 물줄기에 있는 플레이어를 가둔다.
+     *
+     * <p>한 번에 터지는 물풍선은 모두 같은 순간 터진 것으로 본다. 그래서 줄기를 다 정할 때까지 물풍선을 맵에서 빼지 않고,
+     * 어느 줄기든 물풍선이 있는 칸(이번에 함께 터지는 것 포함) 앞에서 멈춘다. 그러면 놓은 순서와 상관없이 결과가 같다.</p>
+     *
+     */
     private void explodeDueBalloons(long now, List<MatchEvent> events) {
         Deque<Balloon> queue = new ArrayDeque<>();
+        Set<Balloon> exploding = new LinkedHashSet<>();
         for (Balloon balloon : balloons) {
-            if (balloon.fuseAt() <= now) {
+            if (balloon.fuseAt() <= now && exploding.add(balloon)) {
                 queue.add(balloon);
             }
         }
@@ -303,9 +338,6 @@ public final class Match {
         Set<Cell> hitBlocks = new LinkedHashSet<>();
         while (!queue.isEmpty()) {
             Balloon balloon = queue.poll();
-            if (!balloons.remove(balloon)) {
-                continue;
-            }
             Set<Cell> covered = new LinkedHashSet<>();
             covered.add(balloon.cell());
             int[] reach = new int[Facing.values().length];
@@ -322,7 +354,9 @@ public final class Match {
                     Balloon other = balloonAt(new Cell(col, row));
                     if (other != null) {
                         // 닿은 물풍선도 같은 순간 터져 그 칸을 덮는다
-                        queue.add(other);
+                        if (exploding.add(other)) {
+                            queue.add(other);
+                        }
                         break;
                     }
                     covered.add(new Cell(col, row));
@@ -338,6 +372,7 @@ public final class Match {
                     reach[Facing.UP.ordinal()], reach[Facing.DOWN.ordinal()],
                     reach[Facing.LEFT.ordinal()], reach[Facing.RIGHT.ordinal()]));
         }
+        balloons.removeAll(exploding);
 
         // 블럭은 모든 물줄기를 정한 뒤 한 번씩만 맞힌다 (두 물줄기가 같은 블럭에 닿아도 한 번)
         List<ChangedTile> tiles = new ArrayList<>();
@@ -351,49 +386,60 @@ public final class Match {
         events.add(toAll(MatchMessages.BALLOON_EXPLODED, new BalloonExploded(exploded, tiles, List.of(), List.of())));
 
         for (MatchPlayer player : players.values()) {
-            if (player.state() == MatchPlayer.State.ALIVE) {
-                trapIfWet(player, now, events);
-            }
+            trapIfWet(player, now, events);
         }
     }
 
+    /** 살아 있고 빠져나오는 중이 아닌 사람이 물줄기 칸에 있으면 가둔다 */
     private void trapIfWet(MatchPlayer player, long now, List<MatchEvent> events) {
+        if (!player.isFree(now)) {
+            return;
+        }
         Flame flame = flameAt(player.cell(), now);
         if (flame == null) {
             return;
         }
-        player.trap(now + POP_MS);
+        player.trap(now, now + POP_MS);
         events.add(toAll(MatchMessages.PLAYER_TRAPPED, new PlayerTrapped(player.playerId(), flame.balloonId(), POP_MS)));
     }
 
     /**
-     * 움직인 사람이 닿은 사람을 판정한다. 같은 팀이면 갇힌 쪽을 구하고, 다른 팀이면 갇힌 쪽을 터뜨린다.
-     * 갇힌 사람끼리, 터진 사람과는 아무 일도 없다.
+     * 갇힌 사람마다 닿은 살아 있는 사람을 본다 (클라이언트 BattleRules.settleTouches와 같다).
+     * 상대가 하나라도 닿았으면 같은 편이 함께 닿았어도 터뜨리고, 상대가 없고 같은 편이 닿았으면 구한다.
+     * 닿은 사람 가운데 중심이 가장 가까운 사람(거리가 같으면 playerId가 작은 사람)이 kill·save를 얻는다.
+     * 막 갇힌 사람({@link #MIN_TRAPPED_MS} 안)과 갇힘 시간이 다 된 사람(tick이 TIMEOUT으로 터뜨린다)은 판정하지 않는다.
+     * 빠져나오는 중인 사람은 남에게 닿지 않는다.
      */
-    private void resolveTouches(MatchPlayer mover, List<MatchEvent> events) {
-        for (MatchPlayer other : players.values()) {
-            if (other == mover || !touches(mover, other)) {
+    private void settleTouches(long now, List<MatchEvent> events) {
+        for (MatchPlayer trapped : players.values()) {
+            if (trapped.state() != MatchPlayer.State.TRAPPED || now - trapped.trappedAt() < MIN_TRAPPED_MS
+                    || trapped.trappedUntil() <= now) {
                 continue;
             }
-            MatchPlayer free;
-            MatchPlayer trapped;
-            if (mover.state() == MatchPlayer.State.ALIVE && other.state() == MatchPlayer.State.TRAPPED) {
-                free = mover;
-                trapped = other;
-            } else if (mover.state() == MatchPlayer.State.TRAPPED && other.state() == MatchPlayer.State.ALIVE) {
-                free = other;
-                trapped = mover;
-            } else {
+            List<MatchPlayer> touching = players.values().stream()
+                    .filter(other -> other != trapped && other.isFree(now) && touches(other, trapped))
+                    .toList();
+            MatchPlayer killer = nearest(trapped,
+                    touching.stream().filter(other -> other.team() != trapped.team()).toList());
+            if (killer != null) {
+                pop(trapped, killer, events);
                 continue;
             }
-            if (free.team() == trapped.team()) {
-                trapped.rescue();
-                free.addSave();
-                events.add(toAll(MatchMessages.PLAYER_RESCUED, new PlayerRescued(trapped.playerId(), free.playerId())));
-            } else {
-                pop(trapped, free, events);
+            MatchPlayer saver = nearest(trapped, touching);
+            if (saver != null) {
+                trapped.rescue(now + ESCAPE_MS);
+                saver.addSave();
+                events.add(toAll(MatchMessages.PLAYER_RESCUED, new PlayerRescued(trapped.playerId(), saver.playerId())));
             }
         }
+    }
+
+    private static MatchPlayer nearest(MatchPlayer trapped, List<MatchPlayer> candidates) {
+        return candidates.stream()
+                .min(Comparator.comparingDouble(
+                                (MatchPlayer other) -> Math.hypot(other.x() - trapped.x(), other.y() - trapped.y()))
+                        .thenComparingLong(MatchPlayer::playerId))
+                .orElse(null);
     }
 
     private static boolean touches(MatchPlayer a, MatchPlayer b) {

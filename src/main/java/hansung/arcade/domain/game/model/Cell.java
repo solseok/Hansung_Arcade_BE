@@ -5,8 +5,8 @@ package hansung.arcade.domain.game.model;
  */
 public record Cell(int col, int row) {
 
-    /** 가로·세로 칸 수 차이 중 큰 쪽 (대각선 이웃도 1) */
+    /** 가로·세로 칸 수 차이의 합 (상하좌우 이웃이 1, 대각선 이웃은 2) */
     public int distanceTo(Cell other) {
-        return Math.max(Math.abs(col - other.col), Math.abs(row - other.row));
+        return Math.abs(col - other.col) + Math.abs(row - other.row);
     }
 }
