@@ -99,6 +99,46 @@ class RoomTest {
 
         assertEquals(RoomStatus.PLAYING, room.status());
         assertFalse(room.canSeat(1));
+        assertThrows(IllegalStateException.class, () -> room.seat(200, players(2), "kkukku", Team.RED));
+        assertEquals(1, room.size());
+    }
+
+    @Test
+    void 처음_앉은_사람이_방장이고_더_작은_자리에_누가_앉아도_바뀌지_않는다() {
+        Room room = new Room(1, "a", 8);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        room.seat(200, players(2), "kkukku", Team.RED);
+        room.seat(300, players(3), "kkukku", Team.RED);
+        room.unseat(100);
+
+        room.seat(400, players(4), "kkukku", Team.RED);
+
+        assertEquals(0, room.members().getFirst().slot());
+        assertEquals(4, room.members().getFirst().playerId());
+        assertEquals(2, room.hostId());
+        assertTrue(room.isHostConnection(200));
+        assertFalse(room.isHostConnection(400));
+        assertTrue(room.ready(400, true));
+        assertFalse(room.allReady());
+        room.ready(300, true);
+        assertTrue(room.allReady());
+    }
+
+    @Test
+    void 한_연결의_플레이어마다_값이_다르면_바뀐_사람만_준비가_풀린다() {
+        Room room = new Room(1, "a", 8);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        room.seat(200, players(2), "kkukku", Team.RED);
+        room.seat(200, players(3), "kkokko", Team.BLUE);
+        room.ready(200, true);
+
+        assertTrue(room.selectCharacter(200, "kkukku"));
+        assertEquals(List.of(true, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+
+        room.ready(200, true);
+        assertTrue(room.selectTeam(200, Team.RED));
+        assertEquals(List.of(true, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+        assertEquals(List.of("kkukku", "kkukku"), room.membersOf(200).stream().map(RoomMember::character).toList());
     }
 
     @Test

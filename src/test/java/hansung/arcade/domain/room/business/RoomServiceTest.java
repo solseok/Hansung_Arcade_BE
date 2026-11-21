@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import hansung.arcade.core.net.Json;
 import hansung.arcade.domain.game.business.EventSender;
 import hansung.arcade.domain.game.business.GameService;
+import hansung.arcade.domain.game.business.GameService.Participant;
+import hansung.arcade.domain.game.model.Team;
 import hansung.arcade.domain.game.model.MatchEvent;
 import hansung.arcade.domain.player.model.Player;
 import hansung.arcade.global.exception.GameException;
@@ -16,11 +18,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -1376,5 +1381,217 @@ class RoomServiceTest {
         rooms.finishGame(12345);
 
         assertTrue(sent.isEmpty());
+    }
+
+    // ---------- 방장 규칙 ----------
+
+    @Test
+    void 방장보다_작은_빈자리에_누가_앉아도_방장은_바뀌지_않는다() {
+        rooms.create(1, one(1, "가가"), "a", 4, reply(1));
+        rooms.join(2, one(2, "나나"), 1, reply(2));
+        rooms.join(3, one(3, "다다"), 1, reply(3));
+        rooms.leave(1, reply(1));
+        clearSent();
+
+        rooms.join(4, one(4, "라라"), 1, reply(4));
+
+        JsonNode state = last(4, "REPLY");
+        assertEquals(0, player(state, "라라").get("slot").asInt());
+        assertEquals(21, state.get("hostId").asLong());
+        assertEquals(List.of("라라님이 들어왔습니다."), chatsTo(2));
+        assertCode("NOT_HOST", () -> rooms.startGame(4, reply(4)));
+        assertCode("NOT_HOST", () -> rooms.changeMap(4, "random", reply(4)));
+        rooms.changeMap(2, "random", reply(2));
+        // 새로 온 사람의 준비는 무시되지 않는다
+        rooms.ready(4, true);
+        assertTrue(player(last(2, "ROOM_STATE"), "라라").get("ready").asBoolean());
+    }
+
+    @Test
+    void 맵_변경으로_자리를_옮겨도_방장은_그대로다() {
+        rooms.create(1, one(1, "s0"), "a", 8, reply(1));
+        for (long c = 2; c <= 7; c++) {
+            rooms.join(c, one(c, "s" + (c - 1)), 1, reply(c));
+        }
+        rooms.leave(1, reply(1));
+
+        rooms.changeMap(2, "village/village10", reply(2));
+
+        JsonNode state = last(2, "ROOM_STATE");
+        assertEquals(0, player(state, "s6").get("slot").asInt());
+        assertEquals(21, state.get("hostId").asLong());
+        assertCode("NOT_HOST", () -> rooms.changeMap(7, "random", reply(7)));
+    }
+
+    @Test
+    void 방장이_아닌데_준비하지_않은_사람만_시작을_막는다() {
+        rooms.create(1, one(1, "가가"), "a", 4, reply(1));
+        rooms.join(2, one(2, "나나"), 1, reply(2));
+        rooms.join(3, one(3, "다다"), 1, reply(3));
+        rooms.leave(1, reply(1));
+        rooms.join(4, one(4, "라라"), 1, reply(4));
+        rooms.selectTeam(3, "BLUE");
+        rooms.ready(3, true);
+        assertCode("NOT_ALL_READY", () -> rooms.startGame(2, reply(2)));
+
+        rooms.ready(4, true);
+        rooms.startGame(2, reply(2));
+
+        assertEquals("PLAYING", Json.MAPPER.valueToTree(rooms.list(9)).at("/rooms/0/status").asText());
+    }
+
+    // ---------- 경기를 열지 못할 때 ----------
+
+    /** 손님(연결 2)을 다른 경기에 넣어 두어 GameService.start가 실패하게 한다 */
+    private void occupyGuestElsewhere() {
+        games.start("camp/camp08", List.of(new Participant(99, 2, "딴판", "kkukku", Team.RED),
+                new Participant(98, 50, "딴판둘", "kkukku", Team.BLUE)));
+    }
+
+    @Test
+    void 경기를_열지_못하면_응답_뒤_대기실_상태와_안내를_보내고_준비는_그대로다() {
+        loggedIn.add(9L);
+        readyToStart();
+        occupyGuestElsewhere();
+        clearSent();
+
+        rooms.startGame(1, reply(1));
+
+        assertEquals(List.of("REPLY", "ROOM_STATE", "CHAT_MESSAGE"), typesTo(1));
+        JsonNode state = last(1, "ROOM_STATE");
+        assertEquals("WAITING", state.at("/room/status").asText());
+        assertTrue(player(state, "손님").get("ready").asBoolean());
+        JsonNode notice = last(1, "CHAT_MESSAGE");
+        assertEquals(0, notice.get("senderId").asLong());
+        assertEquals("게임을 시작하지 못했습니다. 다시 시도해 주세요.", notice.get("text").asText());
+        assertTrue(typesTo(2).containsAll(List.of("ROOM_STATE", "CHAT_MESSAGE")));
+        // 로비에는 게임 중이라고 알린 적이 없다
+        assertTrue(typesTo(9).isEmpty());
+        assertEquals("WAITING", Json.MAPPER.valueToTree(rooms.list(9)).at("/rooms/0/status").asText());
+    }
+
+    @Test
+    void 로비의_게임_중_알림은_GAME_STARTED_뒤에_나간다() {
+        loggedIn.add(9L);
+        readyToStart();
+        clearSent();
+
+        rooms.startGame(1, reply(1));
+
+        List<String> order = sent.stream().map(Sent::type).filter(t -> !t.equals("REPLY")).distinct().toList();
+        assertEquals(List.of("GAME_STARTED", "LOBBY_ROOMS"), order);
+    }
+
+    // ---------- 검사 순서와 문구 ----------
+
+    @Test
+    void 방에_있는_연결은_끊겼어도_ALREADY_IN_ROOM이_먼저다() {
+        rooms.create(1, one(1, "가가"), "a", 8, reply(1));
+        closed.add(1L);
+
+        assertCode("ALREADY_IN_ROOM", () -> rooms.create(1, one(1, "가가"), "b", 8, reply(1)));
+        assertCode("ALREADY_IN_ROOM", () -> rooms.join(1, one(1, "가가"), 1, reply(1)));
+        assertCode("ALREADY_IN_ROOM", () -> rooms.quickJoin(1, one(1, "가가"), reply(1)));
+    }
+
+    @Test
+    void 정원이_함께_들어가는_인원보다_적으면_CAPACITY_TOO_SMALL() {
+        loggedIn.add(1L);
+        List<Player> three = List.of(new Player(11, "가가"), new Player(12, "나나"), new Player(13, "다다"));
+
+        assertCode("CAPACITY_TOO_SMALL", () -> rooms.create(1, three, "a", 2, reply(1)));
+        assertEquals("정원이 함께 들어가는 인원보다 적습니다.", message(() -> rooms.create(1, three, "a", 2, reply(1))));
+        assertCode("CAPACITY_INVALID", () -> rooms.create(1, three, "a", 1, reply(1)));
+    }
+
+    @Test
+    void 대기실이_아닐_때의_안내_문구() {
+        assertEquals("방에 있지 않습니다.", message(() -> rooms.leave(5, reply(5))));
+        assertEquals("대기실에서만 준비할 수 있습니다.", message(() -> rooms.ready(5, true)));
+        assertEquals("대기실에서만 캐릭터를 고를 수 있습니다.", message(() -> rooms.selectCharacter(5, "kkukku")));
+        assertEquals("대기실에서만 팀을 고를 수 있습니다.", message(() -> rooms.selectTeam(5, "RED")));
+        assertEquals("대기실에서만 맵을 고를 수 있습니다.", message(() -> rooms.changeMap(5, "random", reply(5))));
+        assertEquals("대기실에서만 게임을 시작할 수 있습니다.", message(() -> rooms.startGame(5, reply(5))));
+
+        readyToStart();
+        rooms.startGame(1, reply(1));
+        for (Runnable action : List.<Runnable>of(() -> rooms.leave(2, reply(2)), () -> rooms.ready(2, false),
+                () -> rooms.selectCharacter(2, "kkukku"), () -> rooms.selectTeam(2, "RED"),
+                () -> rooms.changeMap(1, "random", reply(1)), () -> rooms.startGame(1, reply(1)))) {
+            assertEquals("게임 중에는 할 수 없습니다.", message(action));
+        }
+    }
+
+    // ---------- null ----------
+
+    @Test
+    void 제목이_null이면_TITLE_INVALID() {
+        assertCode("TITLE_INVALID", () -> rooms.create(1, one(1, "가가"), null, 8, reply(1)));
+    }
+
+    @Test
+    void 채팅_내용이_null이면_방과_플레이어를_검사한_뒤_버린다() {
+        assertCode("WRONG_STATE", () -> rooms.chat(1, 11, null));
+        hostAndGuest();
+        assertCode("BAD_MESSAGE", () -> rooms.chat(1, 21, null));
+        clearSent();
+
+        rooms.chat(1, 11, null);
+
+        assertTrue(sent.isEmpty());
+    }
+
+    @Test
+    void 만들_때_빈_값을_받지_않는다() {
+        RoomSender sender = new RoomSender() {
+            @Override
+            public void send(Collection<Long> connectionIds, String type, Object body) {
+            }
+
+            @Override
+            public void sendToLobby(Collection<Long> inRoom, String type, Object body) {
+            }
+
+            @Override
+            public boolean isConnected(long connectionId) {
+                return true;
+            }
+        };
+        assertThrows(NullPointerException.class, () -> new RoomService(null, games, clock::get));
+        assertThrows(NullPointerException.class, () -> new RoomService(sender, null, clock::get));
+        assertThrows(NullPointerException.class, () -> new RoomService(sender, games, null));
+    }
+
+    // ---------- lock ----------
+
+    @Test
+    void 바깥에서_서비스_객체를_잠가도_방_처리가_막히지_않는다() throws InterruptedException {
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            synchronized (rooms) {
+                locked.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+        holder.start();
+        assertTrue(locked.await(1, TimeUnit.SECONDS));
+        try {
+            CountDownLatch done = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                rooms.create(1, one(1, "가가"), "a", 8, reply(1));
+                done.countDown();
+            });
+            worker.start();
+            assertTrue(done.await(1, TimeUnit.SECONDS), "RoomService가 자기 자신(this)으로 잠그면 안 됩니다.");
+        } finally {
+            release.countDown();
+            holder.join();
+        }
+        assertNotNull(last(1, "REPLY"));
     }
 }

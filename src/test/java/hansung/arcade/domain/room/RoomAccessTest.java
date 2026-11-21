@@ -19,12 +19,14 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -118,6 +120,42 @@ class RoomAccessTest {
         }
         int modifiers = GameMaps.class.getDeclaredField("RANDOM_MAX_PLAYERS").getModifiers();
         assertTrue(!Modifier.isPublic(modifiers) && !Modifier.isPrivate(modifiers));
+    }
+
+    @Test
+    void 메시지_body_record와_만드는_함수의_모양이_같다() throws NoSuchMethodException {
+        Set<String> records = Arrays.stream(RoomMessages.class.getDeclaredClasses())
+                .filter(type -> Modifier.isPublic(type.getModifiers()))
+                .map(Class::getSimpleName)
+                .collect(Collectors.toCollection(TreeSet::new));
+        assertEquals(new TreeSet<>(Set.of("RoomList", "RoomSummary", "RoomState", "RoomInfo", "SeatedPlayer",
+                "ChatMessage")), records);
+        for (Class<?> type : RoomMessages.class.getDeclaredClasses()) {
+            assertTrue(type.isRecord(), type.getSimpleName() + "는 record여야 합니다.");
+        }
+        RoomMessages.class.getMethod("list", Collection.class);
+        RoomMessages.class.getMethod("state", Room.class);
+        RoomMessages.class.getMethod("chat", RoomMember.class, String.class);
+        RoomMessages.class.getMethod("notice", String.class);
+    }
+
+    @Test
+    void RoomSender의_연결_확인은_구현이_반드시_정한다() throws NoSuchMethodException {
+        assertFalse(RoomSender.class.getMethod("isConnected", long.class).isDefault());
+    }
+
+    @Test
+    void 방_에러_code는_명세의_것이_모두_있다() throws IllegalAccessException {
+        Set<String> codes = new TreeSet<>();
+        for (Field field : RoomErrorCode.class.getDeclaredFields()) {
+            if (Modifier.isPublic(field.getModifiers())) {
+                assertEquals(field.getName(), field.get(null));
+                codes.add(field.getName());
+            }
+        }
+        assertEquals(new TreeSet<>(Set.of("TITLE_INVALID", "CAPACITY_INVALID", "CAPACITY_TOO_SMALL",
+                "ALREADY_IN_ROOM", "ROOM_LIMIT", "ROOM_NOT_FOUND", "ROOM_PLAYING", "ROOM_FULL", "NO_ROOM",
+                "MAP_INVALID", "MAP_TOO_SMALL", "NOT_ENOUGH_PLAYERS", "NOT_ALL_READY", "ONE_TEAM")), codes);
     }
 
     @Test

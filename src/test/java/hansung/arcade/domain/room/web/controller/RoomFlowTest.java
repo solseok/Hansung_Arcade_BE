@@ -4,7 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import hansung.arcade.core.net.GameServer;
 import hansung.arcade.core.net.Json;
 import hansung.arcade.core.net.MessageDispatcher;
+import hansung.arcade.core.net.Connection;
 import hansung.arcade.domain.game.business.GameService;
+import hansung.arcade.domain.game.business.GameService.Participant;
+import hansung.arcade.domain.game.model.Team;
 import hansung.arcade.domain.game.web.controller.GameConnections;
 import hansung.arcade.domain.game.web.controller.GameHandlers;
 import hansung.arcade.domain.game.web.controller.GameListener;
@@ -40,12 +43,13 @@ class RoomFlowTest {
 
     private final AtomicLong clock = new AtomicLong(1_000);
     private GameServer server;
+    private GameService gameService;
 
     @BeforeEach
     void startServer() throws IOException {
         SessionService sessionService = new SessionService(new InMemoryPlayerRepository());
         GameConnections gameConnections = new GameConnections();
-        GameService gameService = new GameService(gameConnections, clock::get, new Random(3));
+        gameService = new GameService(gameConnections, clock::get, new Random(3));
         RoomConnections roomConnections = new RoomConnections();
         RoomService roomService = new RoomService(roomConnections, gameService, clock::get);
         gameService.onFinished(match -> roomService.finishGame(match.matchId()));
@@ -232,6 +236,62 @@ class RoomFlowTest {
                 assertEquals("BAD_MESSAGE", error.at("/body/code").asText(), push[0] + " " + push[1]);
                 assertEquals(push[0], error.at("/body/type").asText());
             }
+        }
+    }
+
+    @Test
+    void BAD_MESSAGE_안내는_어느_필드가_틀렸는지_알려_준다() throws IOException {
+        try (Client client = new Client("가가")) {
+            String[][] requests = {
+                    {"ROOM_CREATE", "{\"capacity\":4}", "title는 문자열이어야 합니다."},
+                    {"ROOM_CREATE", "{\"title\":\"a\",\"capacity\":\"4\"}", "capacity는 정수여야 합니다."},
+                    {"ROOM_JOIN", "{\"roomNumber\":\"1\"}", "roomNumber는 정수여야 합니다."}};
+            for (String[] request : requests) {
+                client.send("{\"type\":\"" + request[0] + "\",\"id\":2,\"body\":" + request[1] + "}");
+                assertEquals(request[2], client.next(request[0]).at("/error/message").asText());
+            }
+            client.send("{\"type\":\"ROOM_CREATE\",\"id\":3,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            client.next("ROOM_CREATE");
+            String[][] pushes = {
+                    {"CHANGE_MAP", "{}", "mapId는 문자열이어야 합니다."},
+                    {"READY", "{\"ready\":1}", "ready는 true나 false여야 합니다."},
+                    {"SELECT_CHARACTER", "{}", "character는 문자열이어야 합니다."},
+                    {"SELECT_TEAM", "{}", "team는 문자열이어야 합니다."},
+                    {"CHAT", "{\"text\":1}", "text는 문자열이어야 합니다."},
+                    {"CHAT", "{\"text\":\"a\",\"playerId\":\"1\"}", "playerId는 정수여야 합니다."}};
+            for (String[] push : pushes) {
+                client.send("{\"type\":\"" + push[0] + "\",\"body\":" + push[1] + "}");
+                assertEquals(push[2], client.next("ERROR").at("/body/message").asText(), push[0]);
+            }
+        }
+    }
+
+    @Test
+    void 경기를_열지_못해도_GAME_START_응답은_한_번이고_안내가_온다() throws Exception {
+        try (Client host = new Client("방장"); Client guest = new Client("손님"); Client other = new Client("딴판")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            host.next("ROOM_CREATE");
+            guest.send("{\"type\":\"ROOM_JOIN\",\"id\":3,\"body\":{\"roomNumber\":1}}");
+            guest.receive("ROOM_JOIN");
+            guest.send("{\"type\":\"SELECT_TEAM\",\"body\":{\"team\":\"BLUE\"}}");
+            guest.send("{\"type\":\"READY\",\"body\":{\"ready\":true}}");
+            guest.send("{\"type\":\"PING\",\"id\":4,\"body\":{}}");
+            guest.receive("PING");
+            host.send("{\"type\":\"PING\",\"id\":5,\"body\":{}}");
+            host.receive("PING");
+            // 손님 연결을 다른 경기에 넣어 두면 GameService.start가 실패한다 (접속 순서: 방장, 손님, 딴판)
+            List<Long> ids = server.connections().stream().map(Connection::id).sorted().toList();
+            gameService.start("camp/camp08", List.of(new Participant(99, ids.get(1), "손님", "kkukku", Team.RED),
+                    new Participant(98, ids.get(2), "딴판", "kkukku", Team.BLUE)));
+
+            host.send("{\"type\":\"GAME_START\",\"id\":6,\"body\":{}}");
+            host.send("{\"type\":\"PING\",\"id\":7,\"body\":{}}");
+
+            assertTrue(host.next("GAME_START").get("ok").asBoolean());
+            assertEquals("WAITING", host.next("ROOM_STATE").at("/body/room/status").asText());
+            assertEquals("게임을 시작하지 못했습니다. 다시 시도해 주세요.",
+                    host.next("CHAT_MESSAGE").at("/body/text").asText());
+            assertEquals(7, host.next("PING").get("id").asInt());
         }
     }
 

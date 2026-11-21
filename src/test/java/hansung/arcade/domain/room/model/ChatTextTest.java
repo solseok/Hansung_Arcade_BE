@@ -27,6 +27,16 @@ class ChatTextTest {
     }
 
     @Test
+    void 그_밖의_제어_문자도_공백으로_바꾸고_짝_없는_서로게이트는_지운다() {
+        for (String control : new String[]{"\u0007", "\u000B", "\u000C", "\u001F", "\u0085", "\r"}) {
+            assertEquals("a b", ChatText.clean("a" + control + "b"), Integer.toHexString(control.charAt(0)));
+        }
+        assertEquals("ab", ChatText.clean("a\uD800b"));
+        assertEquals("ab", ChatText.clean("a\uDC00b"));
+        assertEquals("a😀b", ChatText.clean("a😀b"));
+    }
+
+    @Test
     void 서식_문자는_지운다() {
         assertEquals("ab", ChatText.clean("a​b"));
         assertEquals("ab", ChatText.clean("a‮b"));
