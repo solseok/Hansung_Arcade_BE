@@ -6,6 +6,7 @@ import java.util.Optional;
 /**
  * 경기 한 판의 맵 사본. 경기마다 새로 읽으므로 블럭이 부서져도 다른 경기에는 영향이 없다.
  * 칸마다 바닥 층(바뀌지 않음)과 블럭 층(비면 null)이 있다. 맵 바깥은 막힌 칸이다.
+ * 블럭이 부서지거나({@link #hitBlock}) 밀려 나가면({@link #moveBlock}) 그 칸의 바닥이 다시 드러난다.
  * 일부 블럭은 다 부서질 때 늘 같은 아이템을 떨어뜨린다(고정 드롭).
  */
 public final class GameMap {
@@ -74,11 +75,31 @@ public final class GameMap {
     }
 
     /**
+     * 밀리는 블럭을 (col, row)에서 (toCol, toRow)로 옮긴다 (클라이언트 TileMap.moveBlock). 원래 칸은 바닥이 드러난다.
+     * 고정 드롭도 블럭을 따라 옮긴다. 그래서 블럭이 새 칸에서 다 부서지면 그 칸에서 나오고, 원래 칸에서는 다시 나오지 않는다.
+     *
+     * @throws IllegalArgumentException 옮길 칸에 밀리는 블럭이 없거나, 도착할 칸이 맵 밖이거나 이미 블럭이 놓여 있는 경우
+     */
+    void moveBlock(int col, int row, int toCol, int toRow) {
+        if (!isInside(col, row) || blocks[row][col] == null || !blocks[row][col].isPushable()) {
+            throw new IllegalArgumentException("(%d, %d) 칸에 밀리는 블럭이 없습니다.".formatted(col, row));
+        }
+        if (!isInside(toCol, toRow) || blocks[toRow][toCol] != null) {
+            throw new IllegalArgumentException("(%d, %d) 칸은 블럭을 옮겨 놓을 빈 바닥이 아닙니다.".formatted(toCol, toRow));
+        }
+        blocks[toRow][toCol] = blocks[row][col];
+        blocks[row][col] = null;
+        // 도착 칸은 블럭이 없는 칸이라 고정 드롭이 남아 있을 수 없다. 남아 있더라도 나올 블럭이 없으므로 상자 것으로 덮어쓴다
+        fixedDrops[toRow][toCol] = fixedDrops[row][col];
+        fixedDrops[row][col] = null;
+    }
+
+    /**
      * 이 칸의 블럭이 다 부서질 때 늘 나오는 아이템. 맵 파일 [item] 층에 적은 값이다.
      * 고정 드롭이 아닌 칸에서 아이템이 나올지는 확률로 정한다.
      *
-     * <p>칸 좌표에 묶여 있다. 블럭이 다 부서져 떨어뜨리면 {@link #takeFixedDrop}이 그 칸을 비운다.
-     * 상자 밀기를 만들 때, 상자(캠프 울트라 칸은 모두 밀리는 상자다)가 옮겨 가면 고정 드롭도 함께 옮겨야 한다.</p>
+     * <p>블럭이 다 부서져 떨어뜨리면 {@link #takeFixedDrop}이 그 칸을 비운다. 밀리는 상자(캠프 울트라 칸은 모두 상자다)가
+     * 옮겨 가면 {@link #moveBlock}이 고정 드롭도 함께 옮긴다.</p>
      *
      * @return 고정 드롭이 없거나 맵 바깥이면 비어 있다
      */

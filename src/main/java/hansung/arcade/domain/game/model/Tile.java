@@ -15,7 +15,9 @@ public enum Tile {
     SIDE_BLOCK('-', true, true),
     /** 덤불. 지나갈 수 있고 물줄기도 지나간다 */
     BUSH('T', false, false),
+    /** 몸으로 밀면 한 칸 밀리는 상자. 물줄기에 맞으면 부서진다 */
     PUSH_BOX('P', true, true),
+    /** 철로 보강된 상자. 세 번 맞아야 부서지고(c → b → a → 바닥), 상자처럼 밀린다 */
     HARD_BLOCK_3('c', true, true),
     HARD_BLOCK_2('b', true, true),
     HARD_BLOCK_1('a', true, true),
@@ -59,6 +61,20 @@ public enum Tile {
     public boolean isGround() {
         return switch (this) {
             case FLOOR, ROAD, ROAD_LANE, CROSSWALK, SPIKE -> true;
+            default -> false;
+        };
+    }
+
+    /**
+     * 몸으로 밀면 한 칸 밀리는지. 상자와 철로 보강된 상자(c·b·a)다.
+     * 보강된 상자는 타일째 옮기므로 남은 맞을 횟수도 그대로 따라간다.
+     *
+     * <p>클라이언트 Tile.isPushable은 아직 상자만 참이다. 보강된 상자는 클라이언트 BOX_PUSH·BOX_MOVED 연동과 함께
+     * 같은 네 타일로 넓힌다. 그 전의 클라이언트는 BOX_PUSH를 보내지 않으므로 이 차이로 맵이 어긋나지 않는다.</p>
+     */
+    public boolean isPushable() {
+        return switch (this) {
+            case PUSH_BOX, HARD_BLOCK_3, HARD_BLOCK_2, HARD_BLOCK_1 -> true;
             default -> false;
         };
     }

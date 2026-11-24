@@ -3,6 +3,7 @@ package hansung.arcade.domain.game.model;
 import hansung.arcade.domain.game.model.MatchMessages.AirplaneAppeared;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonExploded;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonPlaced;
+import hansung.arcade.domain.game.model.MatchMessages.BoxMoved;
 import hansung.arcade.domain.game.model.MatchMessages.ChangedTile;
 import hansung.arcade.domain.game.model.MatchMessages.DroppedItem;
 import hansung.arcade.domain.game.model.MatchMessages.ExplodedBalloon;
@@ -27,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -74,6 +76,10 @@ public final class Match {
     public static final long POP_MS = 5_000;
     /** 구해진 뒤 빠져나오는 시간. 이 동안은 다시 갇히지 않는다 (클라이언트 Player.ESCAPE_SECONDS) */
     public static final long ESCAPE_MS = 500;
+    /** 터진 뒤 쓰러지는 연출 시간. 이 동안은 몸이 칸을 막는다 (클라이언트 Player.DYING_JUMP_SECONDS + DYING_BLINK_SECONDS) */
+    static final long DYING_MS = 2_000;
+    /** 밀린 상자가 한 칸 미끄러지는 시간. 이 동안은 그 상자를 다시 밀 수 없다 (클라이언트 BoxPusher.SLIDE_SECONDS) */
+    static final long SLIDE_MS = 200;
     /** 갇힌 뒤 적어도 이만큼(타이머 한 번)은 구해지거나 터지지 않는다. 갇힌 모습이 한 번은 보이도록 한다 */
     static final long MIN_TRAPPED_MS = 20;
     /** 두 캐릭터 중심이 가로·세로 모두 이보다 가까우면 닿은 것 (클라이언트 Player.TOUCH_DISTANCE) */
@@ -89,6 +95,8 @@ public final class Match {
     private final List<Flame> flames = new ArrayList<>();
     /** 맵 바닥에 놓인 아이템. 한 칸에 하나뿐이고 패시브만 놓는다(액티브는 아직 다루지 않는다). itemId 순서 */
     private final Map<Integer, FieldItem> items = new LinkedHashMap<>();
+    /** 밀려서 미끄러지는 중인 상자: 도착 칸 → 다 미끄러지는 시각 */
+    private final Map<Cell, Long> slidingUntil = new HashMap<>();
     /** 아이템이 나올지·무엇인지, 흩뿌릴 칸을 정하는 난수 */
     private final RandomGenerator random;
     /** 경기를 열 때의 인원 (한 연결의 1P·2P는 두 명). 블럭에서 아이템이 나올 확률을 정한다 */
@@ -268,6 +276,69 @@ public final class Match {
         Stats stats = new Stats(taker.balloonCapacity(), taker.waterRange(), taker.speedLevel());
         return toAll(MatchMessages.ITEM_TAKEN,
                 new ItemTaken(item.itemId(), taker.playerId(), item.type().id(), stats, null));
+    }
+
+    /**
+     * BOX_PUSH. 밀 수 있으면 서버 맵에서 상자를 한 칸 옮기고 방 전체에 BOX_MOVED를 보낸다. 밀 수 없으면 조용히 버린다.
+     *
+     * <p>밀 수 있는 조건은 클라이언트 {@code BoxPusher.push}와 같다.</p>
+     * <ul>
+     *   <li>미는 사람이 살아 있고 갇히지 않았고 빠져나오는 중도 아니다 (클라이언트 PlayerState.NORMAL).</li>
+     *   <li>마지막 MOVE가 멈춘 상태이고 direction 쪽을 보며, 그 칸(몸 가운데 칸)의 direction 쪽 바로 다음 칸이 (col, row)다.
+     *       클라이언트는 바로 앞 상자에 막혀 움직이지 못한 채 같은 쪽을 누르고 있을 때만 민다.</li>
+     *   <li>(col, row)가 밀리는 상자({@link Tile#isPushable}: 상자 P, 철로 보강된 상자 c·b·a)이고,
+     *       밀려 들어와 아직 미끄러지는 중({@link #SLIDE_MS})이 아니다. 보강된 상자는 남은 맞을 횟수째 옮겨진다.</li>
+     *   <li>밀려 갈 칸이 상자를 받을 수 있다 ({@link #canReceiveBox}).</li>
+     * </ul>
+     * <p>막힌 채 {@code BoxPusher.PUSH_SECONDS}(0.25초) 동안 눌렀는지는 다시 재지 않는다. MOVE는 바뀔 때만 오고 도착 간격이
+     * 통신 지연에 따라 흔들려서, 서버 시계로 재면 제대로 민 요청도 버릴 수 있다.</p>
+     *
+     * <p>맵 칸은 미는 순간 옮긴다. 클라이언트가 그림을 미끄러뜨리는 동안에도 상자는 이미 새 칸에 있으므로, 그 사이 터진 물줄기는
+     * 비워진 원래 칸을 지나가 새 칸의 상자를 맞힌다. 고정 드롭도 상자를 따라간다 ({@link GameMap#moveBlock}).</p>
+     */
+    public synchronized List<MatchEvent> pushBox(long connectionId, long playerId, int col, int row, Facing direction,
+                                                 long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING || direction == null) {
+            return List.of();
+        }
+        MatchPlayer pusher = ownPlayer(connectionId, playerId);
+        Cell box = new Cell(col, row);
+        Long slidesUntil = slidingUntil.get(box);
+        if (pusher == null || !pusher.isFree(now) || pusher.moving() || pusher.facing() != direction
+                || !pusher.cell().equals(new Cell(col - direction.dx(), row - direction.dy()))
+                || !map.isInside(col, row) || !map.tileAt(col, row).isPushable()
+                || (slidesUntil != null && now < slidesUntil)) {
+            return List.of();
+        }
+        Cell to = new Cell(col + direction.dx(), row + direction.dy());
+        if (!canReceiveBox(to, now)) {
+            return List.of();
+        }
+        map.moveBlock(col, row, to.col(), to.row());
+        slidingUntil.values().removeIf(until -> until <= now);
+        slidingUntil.put(to, now + SLIDE_MS);
+        return List.of(toAll(MatchMessages.BOX_MOVED, new BoxMoved(col, row, to.col(), to.row())));
+    }
+
+    /**
+     * 밀린 상자를 받을 수 있는 칸인지 (클라이언트 BoxPusher.canReceive와 GameWorld.BOX_BLOCKERS).
+     * 맵 안의 바닥 타일이어야 하고(블럭·덤불·집 등이 없음), 물풍선·아이템·물줄기와 몸이 조금이라도 걸친 사람이 없어야 한다.
+     * 쓰러지는 연출 중인 사람도 막는다. 물줄기가 남은 칸에 들어간 상자는 바로 부서질 수 있는데,
+     * 거기서 나온 아이템이 그 물줄기에 바로 사라지므로 밀지 않는다.
+     * 클라이언트는 스프링 신발로 내려앉을 칸도 막지만, 서버는 아직 점프를 다루지 않는다.
+     */
+    private boolean canReceiveBox(Cell cell, long now) {
+        if (!map.isInside(cell.col(), cell.row()) || !map.tileAt(cell.col(), cell.row()).isGround()
+                || balloonAt(cell) != null || itemAt(cell) != null || flameAt(cell, now) != null) {
+            return false;
+        }
+        for (MatchPlayer player : players.values()) {
+            if (player.isOnMap(now) && player.overlaps(cell)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -549,7 +620,7 @@ public final class Match {
      */
     private void pop(MatchPlayer player, MatchPlayer killer, long now, List<MatchEvent> events) {
         Cell poppedAt = player.cell();
-        player.pop();
+        player.pop(now + DYING_MS);
         if (killer != null) {
             killer.addKill();
         }

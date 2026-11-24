@@ -41,6 +41,8 @@ public final class MatchPlayer {
     private long trappedUntil;
     private long trappedAt;
     private long escapingUntil;
+    /** 터진 뒤 쓰러지는 연출이 끝나 맵에서 사라지는 시각 */
+    private long goneAt;
     private int placedBalloons;
     private int kills;
     private int saves;
@@ -152,6 +154,14 @@ public final class MatchPlayer {
         return state == State.ALIVE && !isEscaping(now);
     }
 
+    /**
+     * 몸이 아직 맵 위에 있는지. 경기 중인 사람과, 터진 뒤 쓰러지는 연출이 끝나지 않은 사람이다
+     * (클라이언트 PlayerState가 GONE이 아님). 나간 사람은 없다.
+     */
+    boolean isOnMap(long now) {
+        return isInPlay() || (state == State.POPPED && now < goneAt);
+    }
+
     public int placedBalloons() {
         return placedBalloons;
     }
@@ -219,9 +229,11 @@ public final class MatchPlayer {
         escapingUntil = escapeUntil;
     }
 
-    void pop() {
+    /** @param goneAt 쓰러지는 연출이 끝나 맵에서 사라지는 시각. 그때까지 몸이 칸을 막는다 */
+    void pop(long goneAt) {
         state = State.POPPED;
         trappedUntil = 0;
+        this.goneAt = goneAt;
     }
 
     void leave() {
