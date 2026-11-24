@@ -118,9 +118,12 @@ public final class MatchMessages {
 
     /**
      * 서버는 보낸 순간부터 아이템이 맵에 있다고 본다. 그래서 클라이언트는 떨어지는 동안 removedItems·ITEM_TAKEN에 이 itemId가
-     * 오면 놓지 않고, 닿는 순간 발밑에 있으면 ITEM_PICKUP을 보낸다 (Notion ITEM_DROPPED 클라이언트 주의사항).
+     * 오면 놓지 않는다. 사람이 있어도 떨어뜨리고, 닿는 순간 그 칸에 선 사람은 서버가 바로 먹여 ITEM_TAKEN을 보낸다.
+     * 그래도 클라이언트는 닿는 순간 내 플레이어가 그 칸에 있으면 ITEM_PICKUP을 보낸다. 통신 지연으로 서버가 닿을 때 칸이
+     * 비어 보였던 경우를 메우고, 서버가 이미 먹였으면 조용히 버린다 (Notion ITEM_DROPPED).
      *
-     * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 떨어지는 그림에만 쓴다
+     * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 클라이언트는 떨어지는 그림에, 서버는 닿는 순간(보낸 시각 + fallMs)을
+     *               정하는 데 쓴다
      */
     public record ItemDropped(int airplaneId, int itemId, int col, int row, String item, long fallMs) {
     }
