@@ -8,8 +8,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.random.RandomGenerator;
@@ -146,9 +148,9 @@ class MatchScatterTest {
     }
 
     @Test
-    void 도로_가시_블럭_덤불_물풍선_아이템_물줄기_칸은_빼고_사람이_선_칸은_후보에_넣는다() {
+    void 도로_가시_블럭_덤불_물풍선_아이템_물줄기_칸과_경기_중인_사람이_선_칸은_뺀다() {
         Match match = playing(new Random(1));
-        // 1P는 20개를 먹었다. 후보(17칸)보다 많아 후보가 모두 찬다
+        // 1P는 20개를 먹었다. 후보(16칸)보다 많아 후보가 모두 찬다
         List<ItemType> taken = new ArrayList<>();
         for (int i = 0; i < 20; i++) {
             taken.add(ItemType.values()[i % 8]);
@@ -172,14 +174,77 @@ class MatchScatterTest {
         Set<Cell> expected = Set.of(
                 new Cell(1, 0), new Cell(2, 0), new Cell(4, 0),
                 new Cell(0, 1), new Cell(2, 1), new Cell(4, 1), new Cell(5, 1),
-                // (4,2)는 1P가 터진 칸, (5,2)는 2P가 선 칸
-                new Cell(0, 2), new Cell(1, 2), new Cell(2, 2), new Cell(4, 2), new Cell(5, 2), new Cell(6, 2),
+                // (4,2)는 1P가 터진 칸이라 후보다. 2P가 선 (5,2)는 뺀다 (발밑에 떨어지면 칸에 들어서지 않아 줍지 못한다)
+                new Cell(0, 2), new Cell(1, 2), new Cell(2, 2), new Cell(4, 2), new Cell(6, 2),
                 new Cell(1, 3), new Cell(2, 3), new Cell(4, 3), new Cell(5, 3));
         assertEquals(expected, cells(scattered.items()));
-        // 후보가 모자라 17개만 놓이고 나머지 3개는 사라진다. 번호는 고정 드롭(1) 다음부터
-        assertEquals(17, scattered.items().size());
-        assertEquals(List.of(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18),
+        // 후보가 모자라 16개만 놓이고 나머지 4개는 사라진다. 번호는 고정 드롭(1) 다음부터
+        assertEquals(16, scattered.items().size());
+        assertEquals(List.of(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
                 scattered.items().stream().map(DroppedItem::itemId).sorted().toList());
+    }
+
+    @Test
+    void 흩뿌릴_칸은_후보_전체에서_고르게_고른다() {
+        // 아이템 하나를 540판 흩뿌린다. 후보는 풀밭 20칸에서 블럭 (0,0)·덤불 (1,1)·2P (6,2)·3P (0,3)을 뺀 18칸이고,
+        // 1P가 터진 (4,2)는 들어간다. 18칸이 모두 나오고 칸마다 기댓값 30번 안팎이어야 한다
+        Set<Cell> expected = new HashSet<>();
+        for (int row = 0; row < map.rows(); row++) {
+            for (int col = 0; col < map.columns(); col++) {
+                expected.add(new Cell(col, row));
+            }
+        }
+        expected.removeAll(Set.of(new Cell(3, 0), new Cell(3, 1), new Cell(3, 2), new Cell(3, 3), new Cell(5, 0),
+                new Cell(0, 0), new Cell(1, 1), new Cell(6, 3), new Cell(6, 2), new Cell(0, 3)));
+        assertEquals(18, expected.size());
+        Map<Cell, Integer> counts = new HashMap<>();
+        Random seeds = new Random(42);
+        for (int trial = 0; trial < 540; trial++) {
+            Match match = playing(new Random(seeds.nextLong()));
+            trapRed1(match);
+            take(match, RED_1, List.of(ItemType.BUBBLE));
+
+            DroppedItem item = body(match.tick(POPPED_AT), MatchMessages.ITEM_SCATTERED, ItemScattered.class)
+                    .items().get(0);
+            counts.merge(new Cell(item.col(), item.row()), 1, Integer::sum);
+        }
+        assertEquals(expected, counts.keySet());
+        for (Map.Entry<Cell, Integer> entry : counts.entrySet()) {
+            assertTrue(entry.getValue() >= 12 && entry.getValue() <= 54, entry.toString());
+        }
+    }
+
+    @Test
+    void 같은_tick에_두_사람이_터지면_차례로_흩뿌리고_두_번째는_첫_번째가_채운_칸을_쓰지_않는다() {
+        Match match = playing(new Random(5));
+        // 3P를 1P 물풍선의 물줄기 칸 (4,3)에 세워 둘이 함께 갇히고, 시간이 다 돼 같은 tick에 함께 터진다
+        match.move(CONN_RED, RED_3, cx(4), cy(3), Facing.UP, false, PLAY);
+        trapRed1(match);
+        assertEquals(MatchPlayer.State.TRAPPED, match.player(RED_3).state());
+        List<ItemType> red1Items = List.of(ItemType.BUBBLE, ItemType.FLUID, ItemType.ROLLER_SHOE, ItemType.SHOE,
+                ItemType.GLOVE);
+        List<ItemType> red3Items = List.of(ItemType.BUBBLE, ItemType.BUBBLE, ItemType.FLUID, ItemType.TANK,
+                ItemType.ULTRA);
+        take(match, RED_1, red1Items);
+        take(match, RED_3, red3Items);
+
+        List<MatchEvent> events = match.tick(POPPED_AT);
+
+        // 빨강이 모두 터져 파랑만 남는다: 1P 터짐·흩뿌림 → 3P 터짐·흩뿌림 → 경기 끝
+        assertEquals(List.of(MatchMessages.PLAYER_POPPED, MatchMessages.ITEM_SCATTERED, MatchMessages.PLAYER_POPPED,
+                MatchMessages.ITEM_SCATTERED, MatchMessages.GAME_OVER), types(events));
+        ItemScattered first = (ItemScattered) events.get(1).body();
+        ItemScattered second = (ItemScattered) events.get(3).body();
+        assertEquals(RED_1, first.playerId());
+        assertEquals(RED_3, second.playerId());
+        assertEquals(sortedIds(red1Items), first.items().stream().map(DroppedItem::item).sorted().toList());
+        assertEquals(sortedIds(red3Items), second.items().stream().map(DroppedItem::item).sorted().toList());
+        Set<Cell> all = new HashSet<>(cells(first.items()));
+        all.addAll(cells(second.items()));
+        assertEquals(10, all.size());
+        // 1P를 흩뿌릴 때 3P는 아직 갇혀 있어 그 칸 (4,3)에는 떨어지지 않는다. 남은 2P (6,2)에는 둘 다 떨어지지 않는다
+        assertFalse(cells(first.items()).contains(new Cell(4, 3)));
+        assertFalse(all.contains(new Cell(6, 2)));
     }
 
     @Test
