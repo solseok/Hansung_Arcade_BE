@@ -77,8 +77,8 @@ public final class GameMap {
      * 이 칸의 블럭이 다 부서질 때 늘 나오는 아이템. 맵 파일 [item] 층에 적은 값이다.
      * 고정 드롭이 아닌 칸에서 아이템이 나올지는 확률로 정한다.
      *
-     * <p>칸 좌표에 묶여 있고 블럭이 부서진 뒤에도 남는다. 아이템 생성과 상자 밀기를 만들 때, 상자(캠프 울트라 칸은 모두
-     * 밀리는 상자다)가 옮겨 가면 함께 옮기고 한 번 떨어뜨린 칸은 비워야 한다.</p>
+     * <p>칸 좌표에 묶여 있다. 블럭이 다 부서져 떨어뜨리면 {@link #takeFixedDrop}이 그 칸을 비운다.
+     * 상자 밀기를 만들 때, 상자(캠프 울트라 칸은 모두 밀리는 상자다)가 옮겨 가면 고정 드롭도 함께 옮겨야 한다.</p>
      *
      * @return 고정 드롭이 없거나 맵 바깥이면 비어 있다
      */
@@ -87,6 +87,15 @@ public final class GameMap {
             return Optional.empty();
         }
         return Optional.ofNullable(fixedDrops[row][col]);
+    }
+
+    /** 고정 드롭을 꺼내고 그 칸을 비운다. 같은 칸에서 두 번 떨어지지 않게 한다 */
+    Optional<ItemType> takeFixedDrop(int col, int row) {
+        Optional<ItemType> drop = fixedDrop(col, row);
+        if (drop.isPresent()) {
+            fixedDrops[row][col] = null;
+        }
+        return drop;
     }
 
     /** 스폰 칸. 맵 파일의 1, 2, 3 … 순서 */

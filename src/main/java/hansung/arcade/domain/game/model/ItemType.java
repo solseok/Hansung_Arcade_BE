@@ -44,6 +44,14 @@ public enum ItemType {
         return symbol;
     }
 
+    /** 들고 있다가 아이템 키로 쓰는 아이템인지 (바늘·보호막·스프링 신발). 나머지는 먹는 순간 효과가 나는 패시브다 */
+    boolean isActive() {
+        return switch (this) {
+            case NEEDLE, SHIELD, SPRING_SHOE -> true;
+            default -> false;
+        };
+    }
+
     /** 맵 파일 [item] 층 글자에 해당하는 아이템. 없으면 null */
     public static ItemType fromSymbol(char symbol) {
         for (ItemType item : values()) {
