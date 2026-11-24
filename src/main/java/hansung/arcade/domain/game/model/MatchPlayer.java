@@ -25,6 +25,8 @@ public final class MatchPlayer {
     static final double HALF_HITBOX = GameMap.TILE_SIZE / 2.0 - 2;
     /** 충돌 박스가 칸 경계에 딱 맞닿은 것을 걸친 것으로 보지 않게 빼는 값 (클라이언트 {@code Player.EPSILON}) */
     private static final double EDGE = 1e-6;
+    /** 쓰는 아이템을 쌓아 둘 수 있는 가장 많은 개수 (클라이언트 {@code PlayerGear.MAX_ACTIVE_COUNT}) */
+    static final int MAX_HELD_COUNT = 99;
 
     private final long playerId;
     private final long connectionId;
@@ -53,6 +55,13 @@ public final class MatchPlayer {
     private boolean hasTank;
     /** 이 경기에서 먹은 패시브 아이템, 먹은 순서. 터지면 맵에 흩뿌린다 */
     private final List<ItemType> takenItems = new ArrayList<>();
+    /** 손에 든 쓰는 아이템 칸 하나 (클라이언트 {@code PlayerGear}의 액티브 칸). 비면 null */
+    private ItemType heldItem;
+    private int heldCount;
+    /** 보호막이 이때까지 물줄기를 막는다 */
+    private long shieldUntil;
+    /** 스프링 신발로 뛰어 이때까지 공중에 있다 */
+    private long airborneUntil;
 
     public MatchPlayer(long playerId, long connectionId, String nickname, Mascot mascot, Team team, int spawn,
                        Cell spawnCell) {
@@ -194,6 +203,45 @@ public final class MatchPlayer {
         return hasTank;
     }
 
+    /** 손에 든 쓰는 아이템. 없으면 null */
+    public ItemType heldItem() {
+        return heldItem;
+    }
+
+    /** 손에 든 쓰는 아이템 개수. 없으면 0 */
+    public int heldCount() {
+        return heldCount;
+    }
+
+    /** 보호막을 쓰는 중인지 */
+    public boolean isShielded(long now) {
+        return now < shieldUntil;
+    }
+
+    /** 스프링 신발로 뛰어 공중에 있는지. 공중에서는 물줄기에 맞지 않고 물풍선을 놓지 못한다 */
+    public boolean isAirborne(long now) {
+        return now < airborneUntil;
+    }
+
+    /** 지금 물줄기에 갇히지 않는지: 보호막을 쓰는 중이거나 공중에 있다 (클라이언트 {@code PlayerGear.ignoresWater}, 탱크는 아직 빼고) */
+    boolean ignoresWater(long now) {
+        return isShielded(now) || isAirborne(now);
+    }
+
+    /**
+     * 보호막이나 점프가 막 끝났는지. 끝난 뒤 한 번 true를 돌려주고 잊는다.
+     * 물줄기가 남은 칸에 서 있으면 그때 가두도록 경기 타이머가 묻는다.
+     */
+    boolean protectionJustEnded(long now) {
+        long until = Math.max(shieldUntil, airborneUntil);
+        if (until == 0 || now < until) {
+            return false;
+        }
+        shieldUntil = 0;
+        airborneUntil = 0;
+        return true;
+    }
+
     /** 이 경기에서 먹은 패시브 아이템, 먹은 순서. 능력치가 최댓값이라 오르지 않은 것도 들어 있다 */
     List<ItemType> takenItems() {
         return List.copyOf(takenItems);
@@ -222,11 +270,40 @@ public final class MatchPlayer {
     void pop() {
         state = State.POPPED;
         trappedUntil = 0;
+        clearHeld();
     }
 
     void leave() {
         state = State.LEFT;
         trappedUntil = 0;
+        clearHeld();
+    }
+
+    /** @param until 이때까지 물줄기에 갇히지 않는다 */
+    void raiseShield(long until) {
+        shieldUntil = until;
+    }
+
+    /** @param until 이때 내려앉는다. 그때까지 공중에 있다 */
+    void jump(long until) {
+        airborneUntil = until;
+    }
+
+    /** 손에 든 쓰는 아이템을 하나 쓴다. 다 쓰면 칸이 빈다 */
+    void useHeld() {
+        if (heldCount <= 0) {
+            return;
+        }
+        heldCount--;
+        if (heldCount == 0) {
+            heldItem = null;
+        }
+    }
+
+    /** 터지거나 나가면 손에 든 아이템은 흩뿌리지 않고 함께 사라진다 */
+    private void clearHeld() {
+        heldItem = null;
+        heldCount = 0;
     }
 
     void balloonPlaced() {
@@ -246,12 +323,23 @@ public final class MatchPlayer {
     }
 
     /**
-     * 패시브 아이템을 먹는다. 효과는 클라이언트 {@code ItemEffects.apply}와 같고, 능력치는 캐릭터 최댓값에서 멈춘다.
-     * 최댓값이라 오르지 않아도 먹은 것으로 센다 (터질 때 흩뿌린다).
-     *
-     * @throws IllegalArgumentException 액티브 아이템. 서버는 아직 액티브 아이템을 맵에 놓지 않는다
+     * 아이템을 먹는다. 효과는 클라이언트 {@code ItemEffects.apply}와 같다.
+     * <ul>
+     *   <li>패시브: 바로 효과가 나고, 능력치는 캐릭터 최댓값에서 멈춘다. 최댓값이라 오르지 않아도 먹은 것으로 센다 (터질 때 흩뿌린다).</li>
+     *   <li>쓰는 아이템(바늘·보호막·스프링 신발): 손에 든다. 같은 아이템이면 개수가 늘고({@link #MAX_HELD_COUNT}까지),
+     *       다른 아이템이면 바꿔 든다 (전에 든 것은 사라진다). 흩뿌리는 목록에는 넣지 않는다.</li>
+     * </ul>
      */
     void takeItem(ItemType item) {
+        if (item.isActive()) {
+            if (item == heldItem) {
+                heldCount = Math.min(MAX_HELD_COUNT, heldCount + 1);
+            } else {
+                heldItem = item;
+                heldCount = 1;
+            }
+            return;
+        }
         switch (item) {
             case BUBBLE -> balloons = mascot.balloons().clamp((long) balloons + 1);
             case FLUID -> waterRange = mascot.waterRange().clamp((long) waterRange + 1);
@@ -265,7 +353,7 @@ public final class MatchPlayer {
             case SHOE -> canPushBalloons = true;
             case GLOVE -> canThrowBalloons = true;
             case TANK -> hasTank = true;
-            case NEEDLE, SHIELD, SPRING_SHOE -> throw new IllegalArgumentException("액티브 아이템은 아직 다루지 않습니다: " + item);
+            case NEEDLE, SHIELD, SPRING_SHOE -> throw new IllegalStateException("쓰는 아이템은 위에서 손에 들었습니다: " + item);
         }
         takenItems.add(item);
     }

@@ -221,6 +221,18 @@ public final class GameService {
         notifyIfFinished(match);
     }
 
+    /** ITEM_USE. 경기 중이 아니거나 쓸 수 없으면 조용히 버린다 */
+    public void useItem(long connectionId, long playerId, String item) {
+        Match match = byConnection.get(connectionId);
+        if (match == null) {
+            return;
+        }
+        synchronized (match) {
+            deliver(match, match.useItem(connectionId, playerId, item, clock.getAsLong()));
+        }
+        notifyIfFinished(match);
+    }
+
     /**
      * GAME_EXIT. 이 연결의 플레이어가 경기에서 나간다.
      *

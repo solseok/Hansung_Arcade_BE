@@ -6,7 +6,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MatchPlayerTest {
@@ -81,13 +81,32 @@ class MatchPlayerTest {
     }
 
     @Test
-    void 액티브_아이템은_먹지_않는다() {
+    void 쓰는_아이템은_손에_들고_같은_것은_쌓고_다른_것은_바꿔_든다() {
         MatchPlayer player = player("kkukku");
 
-        for (ItemType item : List.of(ItemType.NEEDLE, ItemType.SHIELD, ItemType.SPRING_SHOE)) {
-            assertThrows(IllegalArgumentException.class, () -> player.takeItem(item));
-        }
+        player.takeItem(ItemType.NEEDLE);
+        player.takeItem(ItemType.NEEDLE);
+        assertEquals(ItemType.NEEDLE, player.heldItem());
+        assertEquals(2, player.heldCount());
+
+        player.takeItem(ItemType.SHIELD);
+        assertEquals(ItemType.SHIELD, player.heldItem());
+        assertEquals(1, player.heldCount());
+        // 쓰는 아이템은 터질 때 흩뿌리는 목록에 넣지 않는다
         assertEquals(List.of(), player.takenItems());
+
+        player.useHeld();
+        assertNull(player.heldItem());
+        assertEquals(0, player.heldCount());
+    }
+
+    @Test
+    void 쓰는_아이템은_99개까지_쌓인다() {
+        MatchPlayer player = player("kkukku");
+        for (int i = 0; i < MatchPlayer.MAX_HELD_COUNT + 5; i++) {
+            player.takeItem(ItemType.NEEDLE);
+        }
+        assertEquals(MatchPlayer.MAX_HELD_COUNT, player.heldCount());
     }
 
     @Test

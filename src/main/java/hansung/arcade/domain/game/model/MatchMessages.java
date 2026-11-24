@@ -1,5 +1,7 @@
 package hansung.arcade.domain.game.model;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.List;
 
 /**
@@ -16,6 +18,8 @@ public final class MatchMessages {
     public static final String PLAYER_RESCUED = "PLAYER_RESCUED";
     public static final String PLAYER_POPPED = "PLAYER_POPPED";
     public static final String ITEM_TAKEN = "ITEM_TAKEN";
+    /** 손에 든 쓰는 아이템(바늘·보호막·스프링 신발)을 썼다 */
+    public static final String ITEM_USED = "ITEM_USED";
     /** 터진 사람이 먹은 아이템을 흩뿌렸다. Notion에 아직 없는 메시지라 제안한 모양이다 */
     public static final String ITEM_SCATTERED = "ITEM_SCATTERED";
     /** 비행기가 나와 맵 위를 가로지르기 시작했다 */
@@ -77,8 +81,25 @@ public final class MatchMessages {
     public record PlayerPopped(long playerId, Long killerId, String reason) {
     }
 
-    /** @param heldItem 손에 든 액티브 아이템. 서버가 아직 액티브 아이템을 다루지 않으므로 늘 null */
-    public record ItemTaken(int itemId, long playerId, String item, Stats stats, String heldItem) {
+    /**
+     * @param heldItem  먹은 뒤 손에 든 쓰는 아이템 id. 없으면 null
+     * @param heldCount 손에 든 쓰는 아이템 개수. 없으면 0
+     */
+    public record ItemTaken(int itemId, long playerId, String item, Stats stats, String heldItem, int heldCount) {
+    }
+
+    /**
+     * 쓰는 아이템을 썼다. 값이 없는 필드(null)는 보내지 않는다.
+     *
+     * @param durationMs 효과가 이어지는 시간. 보호막 {@link Match#SHIELD_MS}, 스프링 신발 {@link Match#JUMP_MS}, 바늘은 없음
+     * @param col        스프링 신발이 내려앉을 칸. 다른 아이템은 없음
+     * @param row        스프링 신발이 내려앉을 칸. 다른 아이템은 없음
+     * @param heldItem   쓴 뒤 손에 남은 쓰는 아이템 id. 다 썼으면 없음
+     * @param heldCount  쓴 뒤 손에 남은 개수. 다 썼으면 0
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ItemUsed(long playerId, String item, Long durationMs, Integer col, Integer row, String heldItem,
+                           int heldCount) {
     }
 
     /** 아이템을 먹은 뒤의 능력치 */

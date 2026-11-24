@@ -6,6 +6,7 @@ import hansung.arcade.domain.game.business.GameService;
 import hansung.arcade.domain.game.model.Facing;
 import hansung.arcade.domain.game.web.dto.BalloonPlaceRequest;
 import hansung.arcade.domain.game.web.dto.ItemPickupRequest;
+import hansung.arcade.domain.game.web.dto.ItemUseRequest;
 import hansung.arcade.domain.game.web.dto.MoveRequest;
 import hansung.arcade.global.exception.GameException;
 
@@ -18,6 +19,7 @@ import java.util.Objects;
  *   <li>LOADED, GAME_EXIT: 경기 중이 아니면 ERROR(WRONG_STATE)</li>
  *   <li>MOVE, BALLOON_PLACE: 자주 오므로 틀려도 ERROR를 보내지 않고 조용히 버린다</li>
  *   <li>ITEM_PICKUP: 두 사람이 함께 보내면 늦은 쪽은 당연히 실패하므로, 인정되지 않아도 ERROR 없이 버린다</li>
+ *   <li>ITEM_USE: 쓸 수 없으면 ERROR 없이 버린다 (Notion 명세)</li>
  * </ul>
  */
 public final class GameHandlers {
@@ -26,6 +28,7 @@ public final class GameHandlers {
     public static final String MOVE = "MOVE";
     public static final String BALLOON_PLACE = "BALLOON_PLACE";
     public static final String ITEM_PICKUP = "ITEM_PICKUP";
+    public static final String ITEM_USE = "ITEM_USE";
     public static final String GAME_EXIT = "GAME_EXIT";
 
     private final GameService gameService;
@@ -74,6 +77,14 @@ public final class GameHandlers {
             ItemPickupRequest body = bodyOrNull(() -> request.bodyAs(ItemPickupRequest.class));
             if (body != null && body.isComplete()) {
                 gameService.pickUpItem(connection.id(), body.playerId(), body.itemId());
+            }
+            return null;
+        });
+
+        dispatcher.register(ITEM_USE, (connection, request) -> {
+            ItemUseRequest body = bodyOrNull(() -> request.bodyAs(ItemUseRequest.class));
+            if (body != null && body.isComplete()) {
+                gameService.useItem(connection.id(), body.playerId(), body.item());
             }
             return null;
         });
