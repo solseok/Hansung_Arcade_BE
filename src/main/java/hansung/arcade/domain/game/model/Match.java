@@ -244,11 +244,16 @@ public final class Match {
                 || !taker.cell().equals(item.cell())) {
             return List.of();
         }
-        items.remove(itemId);
+        return List.of(take(taker, item));
+    }
+
+    /** 아이템을 맵에서 치우고 먹인 뒤, 방 전체에 보낼 ITEM_TAKEN을 만든다 */
+    private MatchEvent take(MatchPlayer taker, FieldItem item) {
+        items.remove(item.itemId());
         taker.takeItem(item.type());
         Stats stats = new Stats(taker.balloonCapacity(), taker.waterRange(), taker.speedLevel());
-        return List.of(toAll(MatchMessages.ITEM_TAKEN,
-                new ItemTaken(itemId, taker.playerId(), item.type().id(), stats, null)));
+        return toAll(MatchMessages.ITEM_TAKEN,
+                new ItemTaken(item.itemId(), taker.playerId(), item.type().id(), stats, null));
     }
 
     /**
@@ -496,6 +501,12 @@ public final class Match {
                 trapped.rescue(now + ESCAPE_MS);
                 saver.addSave();
                 events.add(toAll(MatchMessages.PLAYER_RESCUED, new PlayerRescued(trapped.playerId(), saver.playerId())));
+                // 갇힌 채 아이템 칸에 들어가 서 있었다면 지금 줍는다. 갇힌 동안은 ITEM_PICKUP을 버리고,
+                // 클라이언트는 칸에 들어설 때 한 번만 보내므로 구출된 자리에서는 다시 보내지 않는다
+                FieldItem underfoot = itemAt(trapped.cell());
+                if (underfoot != null) {
+                    events.add(take(trapped, underfoot));
+                }
             }
         }
     }
