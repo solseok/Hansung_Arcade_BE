@@ -174,11 +174,12 @@ class MatchTest {
     }
 
     @Test
-    void 서_있는_칸에서_두_칸_떨어졌거나_막힌_칸에는_놓을_수_없다() {
+    void 서_있는_칸에서_두_칸_떨어졌거나_대각선이거나_막힌_칸에는_놓을_수_없다() {
         Match match = playing(Mascot.of("hansungnyangi"), false);
         match.move(CONN_RED, RED_1, cx(2), cy(1), Facing.DOWN, false, PLAY);
 
         assertEquals(List.of(), match.placeBalloon(CONN_RED, RED_1, 4, 1, PLAY));
+        assertEquals(List.of(), match.placeBalloon(CONN_RED, RED_1, 1, 0, PLAY));
         assertEquals(List.of(), match.placeBalloon(CONN_RED, RED_1, 2, 2, PLAY));
         assertEquals(1, match.placeBalloon(CONN_RED, RED_1, 2, 1, PLAY).size());
         assertEquals(List.of(), match.placeBalloon(CONN_RED, RED_1, 2, 1, PLAY));
@@ -218,6 +219,45 @@ class MatchTest {
         BalloonExploded exploded = body(events, MatchMessages.BALLOON_EXPLODED, BalloonExploded.class);
         assertEquals(List.of(1, 2), exploded.balloons().stream().map(ExplodedBalloon::balloonId).toList());
         assertEquals(1, events.stream().filter(event -> event.type().equals(MatchMessages.BALLOON_EXPLODED)).count());
+    }
+
+    @Test
+    void 같은_순간_터지는_이웃_물풍선은_놓은_순서와_상관없이_서로의_칸_앞에서_멈춘다() {
+        for (boolean leftFirst : new boolean[]{true, false}) {
+            // hansungnyangi: 물풍선 2개, 물줄기 1칸. (4,1)과 (5,1)에 같은 시각에 놓는다
+            Match match = playing(Mascot.of("hansungnyangi"), false);
+            int[] order = leftFirst ? new int[]{4, 5} : new int[]{5, 4};
+            for (int col : order) {
+                match.move(CONN_RED, RED_1, cx(col), cy(1), Facing.DOWN, false, PLAY);
+                match.placeBalloon(CONN_RED, RED_1, col, 1, PLAY);
+            }
+
+            BalloonExploded exploded = body(match.tick(PLAY + Match.FUSE_MS), MatchMessages.BALLOON_EXPLODED,
+                    BalloonExploded.class);
+
+            Map<Integer, ExplodedBalloon> byCol = exploded.balloons().stream()
+                    .collect(Collectors.toMap(ExplodedBalloon::col, balloon -> balloon));
+            ExplodedBalloon left = byCol.get(4);
+            ExplodedBalloon right = byCol.get(5);
+            assertEquals(List.of(1, 1, 1, 0), List.of(left.up(), left.down(), left.left(), left.right()), "leftFirst=" + leftFirst);
+            assertEquals(List.of(1, 1, 0, 1), List.of(right.up(), right.down(), right.left(), right.right()), "leftFirst=" + leftFirst);
+        }
+    }
+
+    @Test
+    void 물줄기가_남은_칸에_놓은_물풍선은_바로_터진다() {
+        Match match = playing(Mascot.of("hansungnyangi"), false);
+        match.placeBalloon(CONN_RED, RED_1, 0, 0, PLAY);
+        match.move(CONN_RED, RED_1, cx(2), cy(0), Facing.LEFT, false, PLAY);
+        match.tick(PLAY + Match.FUSE_MS);
+        // (0,0)이 터져 (1,0)까지 물줄기가 남아 있다
+
+        List<MatchEvent> events = match.placeBalloon(CONN_RED, RED_1, 1, 0, PLAY + Match.FUSE_MS + 100);
+
+        assertEquals(List.of(MatchMessages.BALLOON_PLACED, MatchMessages.BALLOON_EXPLODED, MatchMessages.PLAYER_TRAPPED),
+                types(events));
+        assertEquals(0, body(events, MatchMessages.BALLOON_PLACED, BalloonPlaced.class).fuseMs());
+        assertEquals(MatchPlayer.State.TRAPPED, match.player(RED_1).state());
     }
 
     @Test
@@ -267,6 +307,87 @@ class MatchTest {
         assertEquals(Map.of(RED_1, "LOSE", BLUE, "WIN"), outcomes(over));
         assertEquals(1, over.standings().stream().filter(s -> s.playerId() == BLUE).findFirst().orElseThrow().kills());
         assertTrue(match.isFinished());
+    }
+
+    @Test
+    void 갇힐_때_닿아_있던_같은_팀은_움직이지_않아도_다음_tick에_구해_준다() {
+        Match match = playing(Mascot.of("kkukku"), true);
+        // 1P는 (1,1) 오른쪽 끝, 3P는 바로 옆 (2,1) 왼쪽 끝. (0,1) 물풍선의 물줄기는 (1,1)까지만 닿는다
+        match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
+
+        List<MatchEvent> trapped = match.tick(PLAY + Match.FUSE_MS);
+        assertEquals(MatchPlayer.State.TRAPPED, match.player(RED_1).state());
+        assertTrue(!types(trapped).contains(MatchMessages.PLAYER_RESCUED), "갇힌 모습이 한 번은 보여야 한다");
+
+        List<MatchEvent> events = match.tick(PLAY + Match.FUSE_MS + 20);
+
+        assertEquals(new PlayerRescued(RED_1, RED_3), body(events, MatchMessages.PLAYER_RESCUED, PlayerRescued.class));
+    }
+
+    @Test
+    void 막_갇힌_사람은_곧바로_들어온_MOVE로는_풀리지_않는다() {
+        Match match = playing(Mascot.of("kkukku"), true);
+        match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
+        match.tick(PLAY + Match.FUSE_MS);
+
+        List<MatchEvent> events = match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false,
+                PLAY + Match.FUSE_MS + 5);
+
+        assertEquals(List.of(MatchMessages.PLAYER_MOVED), types(events));
+        assertEquals(MatchPlayer.State.TRAPPED, match.player(RED_1).state());
+    }
+
+    @Test
+    void 구해진_뒤_빠져나오는_동안은_남은_물줄기에_다시_갇히지_않는다() {
+        Match match = playing(Mascot.of("kkukku"), true);
+        match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
+        long trappedAt = PLAY + Match.FUSE_MS;
+        match.tick(trappedAt);
+        match.tick(trappedAt + 20);
+        assertEquals(MatchPlayer.State.ALIVE, match.player(RED_1).state());
+
+        // 물줄기(FLAME_MS)는 아직 (1,1)에 남아 있다
+        List<MatchEvent> events = match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, trappedAt + 50);
+
+        assertEquals(List.of(MatchMessages.PLAYER_MOVED), types(events));
+        assertEquals(MatchPlayer.State.ALIVE, match.player(RED_1).state());
+        // 빠져나오는 동안은 물풍선도 놓지 못한다
+        assertEquals(List.of(), match.placeBalloon(CONN_RED, RED_1, 1, 1, trappedAt + 60));
+        assertEquals(1, match.placeBalloon(CONN_RED, RED_1, 1, 1, trappedAt + 20 + Match.ESCAPE_MS).size());
+    }
+
+    @Test
+    void 같은_팀과_상대가_함께_닿으면_상대가_터뜨린다() {
+        Match match = playing(Mascot.of("kkukku"), true);
+        match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_BLUE, BLUE, cx(2) - 16, cy(1) + 2, Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
+        match.tick(PLAY + Match.FUSE_MS);
+
+        List<MatchEvent> events = match.tick(PLAY + Match.FUSE_MS + 20);
+
+        assertEquals(new PlayerPopped(RED_1, BLUE, "TOUCH"), body(events, MatchMessages.PLAYER_POPPED, PlayerPopped.class));
+        assertTrue(!types(events).contains(MatchMessages.PLAYER_RESCUED));
+    }
+
+    @Test
+    void 카운트다운이_끝난_직후의_입력은_tick을_기다리지_않고_받는다() {
+        Match match = match(Mascot.of("kkukku"), false);
+        match.start(0);
+        match.loaded(CONN_RED, 0);
+        match.loaded(CONN_BLUE, 0);
+
+        List<MatchEvent> events = match.move(CONN_RED, RED_1, cx(1), cy(0), Facing.RIGHT, true, Match.COUNTDOWN_MS);
+
+        assertEquals(List.of(MatchMessages.PLAYER_MOVED), types(events));
+        assertEquals(Match.Phase.PLAYING, match.phase());
     }
 
     @Test
@@ -378,7 +499,19 @@ class MatchTest {
     }
 
     @Test
-    void 경기가_끝난_뒤의_나가기는_아무_일도_없다() {
+void 끝난_경기에는_어떤_연결도_남아_있지_않은_것으로_본다() {
+        Match match = playing(Mascot.of("kkukku"), false);
+        assertTrue(match.includes(CONN_RED));
+
+        match.leave(CONN_BLUE, "EXIT", false, PLAY);
+
+        assertTrue(match.isFinished());
+        assertTrue(!match.includes(CONN_RED));
+        assertTrue(!match.includes(CONN_BLUE));
+    }
+
+    @Test
+        void 경기가_끝난_뒤의_나가기는_아무_일도_없다() {
         Match match = playing(Mascot.of("kkukku"), false);
         match.leave(CONN_RED, "DISCONNECT", false, PLAY);
 

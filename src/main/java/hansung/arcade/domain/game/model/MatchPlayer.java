@@ -32,6 +32,8 @@ public final class MatchPlayer {
     private boolean moving;
     private State state = State.ALIVE;
     private long trappedUntil;
+    private long trappedAt;
+    private long escapingUntil;
     private int placedBalloons;
     private int kills;
     private int saves;
@@ -107,6 +109,21 @@ public final class MatchPlayer {
         return trappedUntil;
     }
 
+    /** 마지막으로 갇힌 시각 */
+    public long trappedAt() {
+        return trappedAt;
+    }
+
+    /** 구해져 빠져나오는 중인지. 이 동안은 갇히지 않고, 물풍선을 놓거나 다른 사람에게 닿지 않는다 */
+    public boolean isEscaping(long now) {
+        return state == State.ALIVE && now < escapingUntil;
+    }
+
+    /** 살아 있고 빠져나오는 중도 아님 (클라이언트 PlayerState.NORMAL) */
+    public boolean isFree(long now) {
+        return state == State.ALIVE && !isEscaping(now);
+    }
+
     public int placedBalloons() {
         return placedBalloons;
     }
@@ -136,14 +153,17 @@ public final class MatchPlayer {
         this.moving = moving;
     }
 
-    void trap(long until) {
+    void trap(long now, long until) {
         state = State.TRAPPED;
+        trappedAt = now;
         trappedUntil = until;
     }
 
-    void rescue() {
+    /** @param escapeUntil 이때까지 빠져나오는 중 */
+    void rescue(long escapeUntil) {
         state = State.ALIVE;
         trappedUntil = 0;
+        escapingUntil = escapeUntil;
     }
 
     void pop() {
