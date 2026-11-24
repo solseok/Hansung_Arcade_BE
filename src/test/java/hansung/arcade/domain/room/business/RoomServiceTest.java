@@ -33,9 +33,11 @@ import java.util.function.BiConsumer;
 import java.util.function.LongConsumer;
 import java.util.function.Consumer;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -58,6 +60,9 @@ class RoomServiceTest {
     private final Set<Long> closed = new HashSet<>();
     /** true면 경기 쪽 연결 확인이 예기치 못한 예외를 던진다 (경기를 여는 도중의 오류 흉내) */
     private boolean gameSenderBroken;
+    /** 경기를 열며 연결을 확인할 때마다 연결 번호로 불린다. 확인하는 순간의 끊김을 흉내 낼 때 끼어든다 */
+    private volatile LongConsumer onGameConnectedCheck = id -> {
+    };
     private GameService games;
     private RoomService rooms;
 
@@ -71,6 +76,7 @@ class RoomServiceTest {
 
             @Override
             public boolean isConnected(long connectionId) {
+                onGameConnectedCheck.accept(connectionId);
                 if (gameSenderBroken) {
                     throw new IllegalStateException("경기 쪽 오류");
                 }
@@ -2292,5 +2298,98 @@ class RoomServiceTest {
         }
         assertCode("ROOM_FULL", () -> rooms.join(7, one(7, "p7"), 1, reply(7)));
         assertCode("NO_ROOM", () -> rooms.quickJoin(7, one(7, "p7"), reply(7)));
+    }
+
+    // ---------- PR #8 리뷰에서 나온 것: 경기를 여는 동안의 틈, 리스너 오류 ----------
+
+    @RepeatedTest(10)
+    void 경기를_여는_동안_GAME_EXIT한_참가자는_방과_경기_양쪽에서_빠진다() throws InterruptedException {
+        readyToStart();
+        rooms.join(3, one(3, "셋째"), 1, reply(3));
+        rooms.selectTeam(3, "GREEN");
+        rooms.ready(3, true);
+        AtomicReference<Thread> exiter = new AtomicReference<>();
+
+        // 방장의 GAME_START 응답이 나가는 순간 셋째가 GAME_EXIT를 보낸다
+        rooms.startGame(1, body -> {
+            reply(1).accept(body);
+            Thread thread = new Thread(() -> {
+                try {
+                    games.exit(3);
+                } catch (GameException e) {
+                    // 경기에 등록되기 전이면 WRONG_STATE다. 그래도 방에서는 빠졌으니 경기에도 남으면 안 된다
+                }
+            });
+            exiter.set(thread);
+            thread.start();
+        });
+        exiter.get().join(5_000);
+
+        assertNull(games.matchOf(3), "방에서 빠진 참가자가 경기에 남았습니다");
+        assertEquals(1, listOf(3).get("rooms").size());
+    }
+
+    @Test
+    void 경기를_열며_연결을_확인한_직후_끊긴_연결도_경기에_남지_않는다() throws InterruptedException {
+        AtomicReference<Thread> cleanup = new AtomicReference<>();
+        onGameConnectedCheck = id -> {
+            if (id == 2 && cleanup.get() == null) {
+                // 확인을 통과한 직후 끊겨, 끊김 정리(GameListener)가 다른 스레드에서 돈다
+                Thread thread = new Thread(() -> games.disconnect(2));
+                cleanup.set(thread);
+                thread.start();
+                try {
+                    thread.join(300);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+
+        games.start("camp/camp08", List.of(new Participant(11, 1, "방장", "kkukku", Team.RED),
+                new Participant(21, 2, "손님", "kkukku", Team.BLUE),
+                new Participant(31, 3, "셋째", "kkukku", Team.GREEN)));
+        onGameConnectedCheck = id -> {
+        };
+        cleanup.get().join(5_000);
+
+        assertNull(games.matchOf(2), "끊긴 연결이 경기에 남아 다른 사람들이 로딩 시간 초과까지 기다립니다");
+        assertNotNull(games.matchOf(1));
+    }
+
+    @Test
+    void 로딩_초과_정리가_오류를_내도_경기_종료를_방에_알린다() {
+        readyToStart();
+        rooms.startGame(1, reply(1));
+        games.loaded(1);
+        games.onDropped(id -> {
+            throw new IllegalStateException("방 정리 오류");
+        });
+        clearSent();
+
+        clock.addAndGet(Match.LOAD_TIMEOUT_MS);
+        assertDoesNotThrow(games::tick);
+
+        // 손님이 빠져 RED만 남아 경기가 끝났다. 종료 알림이 사라지면 방이 영영 게임 중에 남는다
+        assertEquals(0, games.activeMatches());
+        assertEquals("WAITING", last(1, "ROOM_STATE").at("/room/status").asText());
+    }
+
+    @Test
+    void 게임_나가기의_방_정리가_오류를_내도_경기에서는_빠진다() {
+        readyToStart();
+        rooms.join(3, one(3, "셋째"), 1, reply(3));
+        rooms.selectTeam(3, "GREEN");
+        rooms.ready(3, true);
+        rooms.startGame(1, reply(1));
+        games.onExit(id -> {
+            throw new IllegalStateException("방 정리 오류");
+        });
+        clearSent();
+
+        assertDoesNotThrow(() -> games.exit(3));
+
+        assertNull(games.matchOf(3));
+        assertTrue(typesTo(1).contains("PLAYER_LEFT"));
     }
 }
