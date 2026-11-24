@@ -8,6 +8,7 @@ import hansung.arcade.domain.game.model.MatchMessages.ItemTaken;
 import hansung.arcade.domain.game.model.MatchMessages.Stats;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.random.RandomGenerator;
@@ -54,13 +55,20 @@ class MatchItemTest {
 
     private final GameMap map = MapLoader.parse("test/items", MAP);
 
-    /** 경기를 열고 PLAYING까지 진행한다. 지금 시각은 {@link #PLAY} */
+    /** 세 명으로 경기를 열고 PLAYING까지 진행한다. 지금 시각은 {@link #PLAY} */
     private Match playing(RandomGenerator random) {
-        Match match = new Match(1, map, List.of(
+        return playing(random, true);
+    }
+
+    /** @param withThird 3P까지 세 명이면 true, 1P·2P 두 명이면 false */
+    private Match playing(RandomGenerator random, boolean withThird) {
+        List<MatchPlayer> players = new ArrayList<>(List.of(
                 new MatchPlayer(RED_1, CONN_RED, "빨강하나", Mascot.of("kkukku"), Team.RED, 1, map.spawns().get(0)),
-                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1)),
-                new MatchPlayer(RED_3, CONN_RED, "빨강셋", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2))),
-                random);
+                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1))));
+        if (withThird) {
+            players.add(new MatchPlayer(RED_3, CONN_RED, "빨강셋", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2)));
+        }
+        Match match = new Match(1, map, players, random);
         match.start(0);
         match.loaded(CONN_RED, 0);
         match.loaded(CONN_BLUE, 0);
@@ -128,6 +136,20 @@ class MatchItemTest {
         assertEquals(List.of(new ChangedTile(4, 0, "."), new ChangedTile(6, 0, "a")), exploded.tiles());
         assertEquals(List.of(new DroppedItem(1, 4, 0, "roller_shoe")), exploded.items());
         assertTrue(random.isUsedUp());
+    }
+
+    @Test
+    void 블럭에서_아이템이_나올_확률은_경기를_열_때의_인원으로_센다() {
+        // 0.36은 2명(33%)이면 안 나오고, 3명(37%, 1P·3P는 한 연결)이면 나온다. 둘째 난수 0.5는 롤러 구간
+        ScriptedRandom threeRandom = new ScriptedRandom(0.36, 0.5);
+        BalloonExploded three = explodeAt(playing(threeRandom, true), 5, PLAY);
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "roller_shoe")), three.items());
+        assertTrue(threeRandom.isUsedUp());
+
+        ScriptedRandom twoRandom = new ScriptedRandom(0.36);
+        BalloonExploded two = explodeAt(playing(twoRandom, false), 5, PLAY);
+        assertEquals(List.of(), two.items());
+        assertTrue(twoRandom.isUsedUp());
     }
 
     @Test
