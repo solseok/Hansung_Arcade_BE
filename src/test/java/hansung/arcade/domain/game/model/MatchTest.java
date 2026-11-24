@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -58,7 +59,7 @@ class MatchTest {
         if (withSecondRed) {
             players.add(new MatchPlayer(RED_3, CONN_RED, "빨강셋", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2)));
         }
-        return new Match(1, map, players);
+        return new Match(1, map, players, new Random(0));
     }
 
     /** 경기를 열고 모두 로딩을 마치고 카운트다운까지 끝내 PLAYING으로 만든다. 지금 시각은 1000 */
@@ -476,7 +477,8 @@ class MatchTest {
         Match other = new Match(2, map, List.of(
                 new MatchPlayer(RED_1, CONN_RED, "빨강", Mascot.of("kkukku"), Team.RED, 1, map.spawns().get(0)),
                 new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1)),
-                new MatchPlayer(RED_3, 103, "초록", Mascot.of("kkukku"), Team.GREEN, 3, map.spawns().get(2))));
+                new MatchPlayer(RED_3, 103, "초록", Mascot.of("kkukku"), Team.GREEN, 3, map.spawns().get(2))),
+                new Random(0));
         other.start(0);
         other.loaded(CONN_RED, 0);
         other.loaded(103, 0);

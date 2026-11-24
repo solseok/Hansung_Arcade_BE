@@ -1,5 +1,7 @@
 package hansung.arcade.domain.game.model;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -38,6 +40,15 @@ public final class MatchPlayer {
     private int kills;
     private int saves;
 
+    private int balloons;
+    private int waterRange;
+    private int speedLevel;
+    private boolean canPushBalloons;
+    private boolean canThrowBalloons;
+    private boolean hasTank;
+    /** 이 경기에서 먹은 패시브 아이템, 먹은 순서. 터지면 맵에 흩뿌린다 */
+    private final List<ItemType> takenItems = new ArrayList<>();
+
     public MatchPlayer(long playerId, long connectionId, String nickname, Mascot mascot, Team team, int spawn,
                        Cell spawnCell) {
         this.playerId = playerId;
@@ -48,6 +59,9 @@ public final class MatchPlayer {
         this.spawn = spawn;
         this.x = GameMap.centerX(spawnCell.col());
         this.y = GameMap.centerY(spawnCell.row());
+        this.balloons = mascot.balloons().base();
+        this.waterRange = mascot.waterRange().base();
+        this.speedLevel = mascot.speedLevel().base();
     }
 
     public long playerId() {
@@ -136,14 +150,39 @@ public final class MatchPlayer {
         return saves;
     }
 
-    /** 한 번에 놓아 둘 수 있는 물풍선 수 (아이템 API 전까지는 캐릭터 시작값) */
+    /** 한 번에 놓아 둘 수 있는 물풍선 수. 캐릭터 시작값에 아이템을 더하고 캐릭터 최댓값에서 멈춘다 */
     public int balloonCapacity() {
-        return mascot.balloons();
+        return balloons;
     }
 
-    /** 물줄기 길이 (아이템 API 전까지는 캐릭터 시작값) */
+    /** 물줄기 길이. 캐릭터 시작값에 아이템을 더하고 캐릭터 최댓값에서 멈춘다 */
     public int waterRange() {
-        return mascot.waterRange();
+        return waterRange;
+    }
+
+    /** 이동속도 단계. 캐릭터 시작값에 아이템을 더하고 캐릭터 최댓값에서 멈춘다 */
+    public int speedLevel() {
+        return speedLevel;
+    }
+
+    /** 물풍선을 밀 수 있는지 (신발, 빨간 악마). 서버는 아직 밀기를 판정하지 않고 상태만 들고 있다 */
+    boolean canPushBalloons() {
+        return canPushBalloons;
+    }
+
+    /** 물풍선을 던질 수 있는지 (장갑). 서버는 아직 던지기를 판정하지 않고 상태만 들고 있다 */
+    boolean canThrowBalloons() {
+        return canThrowBalloons;
+    }
+
+    /** 탱크에 타고 있는지. 서버는 아직 탱크로 물줄기를 막지 않고 상태만 들고 있다 */
+    boolean hasTank() {
+        return hasTank;
+    }
+
+    /** 이 경기에서 먹은 패시브 아이템, 먹은 순서. 능력치가 최댓값이라 오르지 않은 것도 들어 있다 */
+    List<ItemType> takenItems() {
+        return List.copyOf(takenItems);
     }
 
     void moveTo(double x, double y, Facing facing, boolean moving) {
@@ -190,5 +229,42 @@ public final class MatchPlayer {
 
     void addSave() {
         saves++;
+    }
+
+    /**
+     * 패시브 아이템을 먹는다. 효과는 클라이언트 {@code ItemEffects.apply}와 같고, 능력치는 캐릭터 최댓값에서 멈춘다.
+     * 최댓값이라 오르지 않아도 먹은 것으로 센다 (터질 때 흩뿌린다).
+     *
+     * @throws IllegalArgumentException 액티브 아이템. 서버는 아직 액티브 아이템을 맵에 놓지 않는다
+     */
+    void takeItem(ItemType item) {
+        switch (item) {
+            case BUBBLE -> balloons = mascot.balloons().clamp((long) balloons + 1);
+            case FLUID -> waterRange = mascot.waterRange().clamp((long) waterRange + 1);
+            case ROLLER_SHOE -> speedLevel = Math.clamp((long) speedLevel + 1, Mascot.MIN_SPEED_LEVEL,
+                    mascot.speedLevel().max());
+            case ULTRA -> maxOutWaterRange();
+            case RED_DEVIL -> {
+                maxOutWaterRange();
+                canPushBalloons = true;
+            }
+            case SHOE -> canPushBalloons = true;
+            case GLOVE -> canThrowBalloons = true;
+            case TANK -> hasTank = true;
+            case NEEDLE, SHIELD, SPRING_SHOE -> throw new IllegalArgumentException("액티브 아이템은 아직 다루지 않습니다: " + item);
+        }
+        takenItems.add(item);
+    }
+
+    /** 물줄기 길이를 캐릭터 최댓값까지 한 번에 올린다 (클라이언트처럼 최댓값을 더한 뒤 맞춘다) */
+    private void maxOutWaterRange() {
+        waterRange = mascot.waterRange().clamp((long) waterRange + mascot.waterRange().max());
+    }
+
+    /** 터질 때 흩뿌릴 아이템을 꺼낸다. 꺼낸 뒤에는 먹은 아이템이 없다 */
+    List<ItemType> handOverTakenItems() {
+        List<ItemType> items = List.copyOf(takenItems);
+        takenItems.clear();
+        return items;
     }
 }

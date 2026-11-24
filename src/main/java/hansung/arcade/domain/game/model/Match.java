@@ -3,9 +3,12 @@ package hansung.arcade.domain.game.model;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonExploded;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonPlaced;
 import hansung.arcade.domain.game.model.MatchMessages.ChangedTile;
+import hansung.arcade.domain.game.model.MatchMessages.DroppedItem;
 import hansung.arcade.domain.game.model.MatchMessages.ExplodedBalloon;
 import hansung.arcade.domain.game.model.MatchMessages.GameOver;
 import hansung.arcade.domain.game.model.MatchMessages.GameStarted;
+import hansung.arcade.domain.game.model.MatchMessages.ItemScattered;
+import hansung.arcade.domain.game.model.MatchMessages.ItemTaken;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerLeft;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerMoved;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerPopped;
@@ -14,18 +17,22 @@ import hansung.arcade.domain.game.model.MatchMessages.PlayerTrapped;
 import hansung.arcade.domain.game.model.MatchMessages.RoundBegin;
 import hansung.arcade.domain.game.model.MatchMessages.Standing;
 import hansung.arcade.domain.game.model.MatchMessages.StartedPlayer;
+import hansung.arcade.domain.game.model.MatchMessages.Stats;
 import hansung.arcade.global.exception.GameException;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.random.RandomGenerator;
 
 import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
 
@@ -73,19 +80,28 @@ public final class Match {
     private final Set<Long> loaded = new LinkedHashSet<>();
     private final List<Balloon> balloons = new ArrayList<>();
     private final List<Flame> flames = new ArrayList<>();
+    /** 맵 바닥에 놓인 아이템. 한 칸에 하나뿐이고 패시브만 놓는다(액티브는 아직 다루지 않는다). itemId 순서 */
+    private final Map<Integer, FieldItem> items = new LinkedHashMap<>();
+    /** 아이템이 나올지·무엇인지, 흩뿌릴 칸을 정하는 난수 */
+    private final RandomGenerator random;
 
     private Phase phase = Phase.LOADING;
     private long loadDeadline;
     private long playStartsAt;
     private long endsAt;
     private int lastBalloonId;
+    private int lastItemId;
 
-    public Match(long matchId, GameMap map, List<MatchPlayer> participants) {
+    /**
+     * @param random 아이템 생성·흩뿌리기에 쓴다. 이 경기만 쓰도록 따로 만들어 넘긴다 (테스트는 시드를 고정한다)
+     */
+    public Match(long matchId, GameMap map, List<MatchPlayer> participants, RandomGenerator random) {
         if (participants.isEmpty()) {
             throw new IllegalArgumentException("플레이어가 없습니다.");
         }
         this.matchId = matchId;
         this.map = map;
+        this.random = Objects.requireNonNull(random);
         for (MatchPlayer player : participants) {
             if (players.putIfAbsent(player.playerId(), player) != null) {
                 throw new IllegalArgumentException("playerId가 겹칩니다: " + player.playerId());
@@ -205,6 +221,33 @@ public final class Match {
     }
 
     /**
+     * ITEM_PICKUP. 인정되면 방 전체에 ITEM_TAKEN을 보낸다. 인정되지 않으면 조용히 버린다.
+     * 아이템이 아직 있음, 마지막 MOVE 칸이 그 아이템 칸, 살아 있고 갇히지 않음 (Notion 명세).
+     * 구출된 뒤 빠져나오는 중이어도 받는다. 클라이언트는 칸에 들어설 때 한 번만 보내므로, 여기서 버리면 아이템이 맵에 남는다.
+     * lock 안에서 처리하므로 두 사람이 같은 아이템을 보내면 먼저 온 쪽만 먹고, 늦은 쪽은 아이템이 없어 버려진다.
+     *
+     * <p>칸은 마지막 MOVE로만 본다 (물풍선 놓기와 달리 이웃 칸 여유가 없다). 그래서 클라이언트는 아이템 칸에 들어선 위치를
+     * MOVE로 먼저 보내고 ITEM_PICKUP을 보내야 한다. 같은 연결의 메시지는 보낸 차례대로 처리된다.</p>
+     */
+    public synchronized List<MatchEvent> pickUpItem(long connectionId, long playerId, int itemId, long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING) {
+            return List.of();
+        }
+        MatchPlayer taker = ownPlayer(connectionId, playerId);
+        FieldItem item = items.get(itemId);
+        if (taker == null || item == null || taker.state() != MatchPlayer.State.ALIVE
+                || !taker.cell().equals(item.cell())) {
+            return List.of();
+        }
+        items.remove(itemId);
+        taker.takeItem(item.type());
+        Stats stats = new Stats(taker.balloonCapacity(), taker.waterRange(), taker.speedLevel());
+        return List.of(toAll(MatchMessages.ITEM_TAKEN,
+                new ItemTaken(itemId, taker.playerId(), item.type().id(), stats, null)));
+    }
+
+    /**
      * 연결 하나의 플레이어(1P·2P)를 경기에서 뺀다. GAME_EXIT, 끊김, 로딩 시간 초과 모두 여기로 온다.
      * 그 플레이어의 물풍선은 그대로 터지게 둔다. 경기에 없는 연결이면 아무 일도 없다.
      *
@@ -258,6 +301,7 @@ public final class Match {
             phase = Phase.FINISHED;
             balloons.clear();
             flames.clear();
+            items.clear();
             return;
         }
         // 한 팀만 남았으면 로딩 중이어도 ROUND_BEGIN 없이 바로 끝낸다
@@ -281,7 +325,7 @@ public final class Match {
                 settleTouches(now, events);
                 for (MatchPlayer player : players.values()) {
                     if (player.state() == MatchPlayer.State.TRAPPED && player.trappedUntil() <= now) {
-                        pop(player, null, events);
+                        pop(player, null, now, events);
                     }
                 }
                 finishIfDecided(events);
@@ -321,6 +365,8 @@ public final class Match {
      * <p>한 번에 터지는 물풍선은 모두 같은 순간 터진 것으로 본다. 그래서 줄기를 다 정할 때까지 물풍선을 맵에서 빼지 않고,
      * 어느 줄기든 물풍선이 있는 칸(이번에 함께 터지는 것 포함) 앞에서 멈춘다. 그러면 놓은 순서와 상관없이 결과가 같다.</p>
      *
+     * <p>아이템은 클라이언트 GameWorld와 같은 순서로 다룬다. 블럭을 맞히고, 다 부서진 블럭 자리에 아이템을 놓고,
+     * 물줄기가 덮은 칸의 아이템을 없앤다. 블럭 자리는 물줄기가 들어가지 않은 칸이라 방금 나온 아이템은 남는다.</p>
      */
     private void explodeDueBalloons(long now, List<MatchEvent> events) {
         Deque<Balloon> queue = new ArrayDeque<>();
@@ -336,6 +382,7 @@ public final class Match {
 
         List<ExplodedBalloon> exploded = new ArrayList<>();
         Set<Cell> hitBlocks = new LinkedHashSet<>();
+        Set<Cell> wetCells = new LinkedHashSet<>();
         while (!queue.isEmpty()) {
             Balloon balloon = queue.poll();
             Set<Cell> covered = new LinkedHashSet<>();
@@ -364,6 +411,7 @@ public final class Match {
                 }
             }
             flames.add(new Flame(balloon.balloonId(), balloon.cell(), covered, now + FLAME_MS));
+            wetCells.addAll(covered);
             MatchPlayer owner = players.get(balloon.ownerId());
             if (owner != null) {
                 owner.balloonGone();
@@ -376,15 +424,25 @@ public final class Match {
 
         // 블럭은 모든 물줄기를 정한 뒤 한 번씩만 맞힌다 (두 물줄기가 같은 블럭에 닿아도 한 번)
         List<ChangedTile> tiles = new ArrayList<>();
+        List<DroppedItem> dropped = new ArrayList<>();
         for (Cell cell : hitBlocks) {
             if (map.hitBlock(cell.col(), cell.row())) {
-                tiles.add(new ChangedTile(cell.col(), cell.row(),
-                        String.valueOf(map.tileAt(cell.col(), cell.row()).symbol())));
+                Tile after = map.tileAt(cell.col(), cell.row());
+                tiles.add(new ChangedTile(cell.col(), cell.row(), String.valueOf(after.symbol())));
+                if (after.isGround()) {
+                    dropFromBrokenBlock(cell).ifPresent(dropped::add);
+                }
             }
         }
-        // 아이템 API를 만들기 전까지 items·removedItems는 늘 비어 있다.
-        // 그때 다 부서진(바닥이 드러난) 블럭은 map.fixedDrop(...)이 있으면 그 아이템을, 없으면 확률로 정한 아이템을 떨어뜨린다
-        events.add(toAll(MatchMessages.BALLOON_EXPLODED, new BalloonExploded(exploded, tiles, List.of(), List.of())));
+        List<Integer> removed = new ArrayList<>();
+        items.values().removeIf(item -> {
+            boolean wet = wetCells.contains(item.cell());
+            if (wet) {
+                removed.add(item.itemId());
+            }
+            return wet;
+        });
+        events.add(toAll(MatchMessages.BALLOON_EXPLODED, new BalloonExploded(exploded, tiles, dropped, removed)));
 
         for (MatchPlayer player : players.values()) {
             trapIfWet(player, now, events);
@@ -423,7 +481,7 @@ public final class Match {
             MatchPlayer killer = nearest(trapped,
                     touching.stream().filter(other -> other.team() != trapped.team()).toList());
             if (killer != null) {
-                pop(trapped, killer, events);
+                pop(trapped, killer, now, events);
                 continue;
             }
             MatchPlayer saver = nearest(trapped, touching);
@@ -447,14 +505,90 @@ public final class Match {
         return Math.abs(a.x() - b.x()) < TOUCH_DISTANCE && Math.abs(a.y() - b.y()) < TOUCH_DISTANCE;
     }
 
-    /** @param killer 닿아서 터뜨린 사람. 시간이 지나 터졌으면 null */
-    private void pop(MatchPlayer player, MatchPlayer killer, List<MatchEvent> events) {
+    /**
+     * 터뜨린다. PLAYER_POPPED 바로 뒤에, 먹은 아이템이 있었으면 흩뿌리고 ITEM_SCATTERED를 보낸다.
+     *
+     * @param killer 닿아서 터뜨린 사람. 시간이 지나 터졌으면 null
+     */
+    private void pop(MatchPlayer player, MatchPlayer killer, long now, List<MatchEvent> events) {
+        Cell poppedAt = player.cell();
         player.pop();
         if (killer != null) {
             killer.addKill();
         }
         events.add(toAll(MatchMessages.PLAYER_POPPED, new PlayerPopped(player.playerId(),
                 killer == null ? null : killer.playerId(), killer == null ? "TIMEOUT" : "TOUCH")));
+        List<DroppedItem> scattered = scatter(player.handOverTakenItems(), now);
+        if (!scattered.isEmpty()) {
+            events.add(toAll(MatchMessages.ITEM_SCATTERED,
+                    new ItemScattered(player.playerId(), poppedAt.col(), poppedAt.row(), scattered)));
+        }
+    }
+
+    /**
+     * 터진 사람이 먹은 아이템을 맵 전체의 빈 풀밭에 무작위로 흩뿌린다.
+     *
+     * <p>규칙은 실제 크레이지 아케이드(빌리지 개인전) 영상에서 사망 두 건, 아이템 15개를 프레임 단위로 보고 정했다.</p>
+     * <ul>
+     *   <li>떨어진 칸은 죽은 칸에서 맨해튼 거리 1~14칸으로 맵 전체에 가까운 칸·먼 칸이 섞여 있었다
+     *       → 맵 전체 후보에서 중복 없이 균등하게 고른다. 죽은 칸 주변을 비우는 반경도 없다.</li>
+     *   <li>15개 모두 풀밭에 떨어졌고 도로·횡단보도에는 하나도 없었다 (균등 랜덤이었다면 약 0.5%)
+     *       → 후보는 일반 바닥({@link Tile#FLOOR})만이다. 집·나무·블럭·덤불, 물풍선·아이템이 있는 칸은 뺀다.</li>
+     *   <li>집·나무를 넘어 도로 건너편까지도, 바로 옆 칸에도 떨어졌다. 사방이 막힌 곳에서 죽은 장면은 찾지 못했다
+     *       → 막힌 곳 안에만(또는 밖에만) 뿌릴 근거가 없으므로, 갇혔는지·길이 이어져 있는지는 보지 않는다.</li>
+     *   <li>처음 먹은 롤러 셋이 거리순 1·5·6등이었다 (오래전 것이 가까이도, 멀리도 아님)
+     *       → 먹은 순서와 떨어지는 거리는 관계없다. 섞은 후보 칸과 짝지으므로 이미 그렇고, 아이템 목록도 섞어
+     *       후보가 모자랄 때 사라지는 아이템까지 먹은 순서와 관계없게 한다.</li>
+     * </ul>
+     * <p>물줄기가 남은 칸도 뺀다. 클라이언트는 물줄기 칸의 아이템을 바로 지우므로(GameWorld) 놓으면 화면과 어긋난다.
+     * 사람이 서 있는 칸은 막지 않는다. 후보가 모자라면 놓을 수 있는 만큼만 놓고 나머지는 사라진다.</p>
+     *
+     * @return 놓인 아이템. 흩뿌릴 아이템이나 후보 칸이 없으면 비어 있다
+     */
+    private List<DroppedItem> scatter(List<ItemType> taken, long now) {
+        if (taken.isEmpty()) {
+            return List.of();
+        }
+        List<Cell> candidates = new ArrayList<>();
+        for (int row = 0; row < map.rows(); row++) {
+            for (int col = 0; col < map.columns(); col++) {
+                Cell cell = new Cell(col, row);
+                if (map.tileAt(col, row) == Tile.FLOOR && balloonAt(cell) == null && itemAt(cell) == null
+                        && flameAt(cell, now) == null) {
+                    candidates.add(cell);
+                }
+            }
+        }
+        List<ItemType> shuffled = new ArrayList<>(taken);
+        Collections.shuffle(shuffled, random);
+        Collections.shuffle(candidates, random);
+        int count = Math.min(shuffled.size(), candidates.size());
+        List<DroppedItem> placed = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            placed.add(placeItem(candidates.get(i), shuffled.get(i)));
+        }
+        return placed;
+    }
+
+    /**
+     * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 확률표로 정한다.
+     * 서버는 아직 액티브 아이템(바늘·보호막·스프링 신발)을 다루지 않으므로, 정해진 것이 액티브면 아무것도 놓지 않는다.
+     */
+    private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
+        return map.takeFixedDrop(cell.col(), cell.row())
+                .or(() -> ItemDrops.roll(random))
+                .filter(item -> !item.isActive())
+                .map(item -> placeItem(cell, item));
+    }
+
+    /** @throws IllegalArgumentException 액티브 아이템. 맵에는 패시브만 놓는다 (줍는 쪽 {@link MatchPlayer#takeItem}이 패시브만 받는다) */
+    private DroppedItem placeItem(Cell cell, ItemType type) {
+        if (type.isActive()) {
+            throw new IllegalArgumentException("액티브 아이템은 아직 맵에 놓지 않습니다: " + type);
+        }
+        FieldItem item = new FieldItem(++lastItemId, type, cell);
+        items.put(item.itemId(), item);
+        return new DroppedItem(item.itemId(), cell.col(), cell.row(), type.id());
     }
 
     /** 남은 팀이 하나 이하면 경기를 끝낸다. 한 번에 여럿이 터진 뒤 부르므로, 마지막 사람들이 함께 터지면 ALL_DOWN이다 */
@@ -502,6 +636,7 @@ public final class Match {
         phase = Phase.FINISHED;
         balloons.clear();
         flames.clear();
+        items.clear();
         events.add(toAll(MatchMessages.GAME_OVER, new GameOver(reason, standings)));
     }
 
@@ -515,6 +650,15 @@ public final class Match {
         for (Balloon balloon : balloons) {
             if (balloon.cell().equals(cell)) {
                 return balloon;
+            }
+        }
+        return null;
+    }
+
+    private FieldItem itemAt(Cell cell) {
+        for (FieldItem item : items.values()) {
+            if (item.cell().equals(cell)) {
+                return item;
             }
         }
         return null;
@@ -551,5 +695,9 @@ public final class Match {
 
     /** 터진 물풍선이 남긴 물줄기 */
     private record Flame(int balloonId, Cell center, Set<Cell> cells, long until) {
+    }
+
+    /** 맵 바닥에 놓인 아이템 */
+    private record FieldItem(int itemId, ItemType type, Cell cell) {
     }
 }

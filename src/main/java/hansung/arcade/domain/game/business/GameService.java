@@ -131,7 +131,8 @@ public final class GameService {
             Cell spawnCell = map.spawns().get(spawn - 1);
             players.add(new MatchPlayer(p.playerId(), p.connectionId(), p.nickname(), mascot, p.team(), spawn, spawnCell));
         }
-        Match match = new Match(lastMatchId.incrementAndGet(), map, players);
+        // 경기마다 난수를 따로 둔다. 여러 경기가 한 Random을 번갈아 쓰지 않고, 시드를 고정하면 경기 결과가 같다
+        Match match = new Match(lastMatchId.incrementAndGet(), map, players, new Random(random.nextLong()));
 
         Set<Long> connections = new HashSet<>(match.connectionIds());
         Set<Long> disconnected = new HashSet<>();
@@ -204,6 +205,18 @@ public final class GameService {
         }
         synchronized (match) {
             deliver(match, match.placeBalloon(connectionId, playerId, col, row, clock.getAsLong()));
+        }
+        notifyIfFinished(match);
+    }
+
+    /** ITEM_PICKUP. 경기 중이 아니거나 인정되지 않으면 조용히 버린다 */
+    public void pickUpItem(long connectionId, long playerId, int itemId) {
+        Match match = byConnection.get(connectionId);
+        if (match == null) {
+            return;
+        }
+        synchronized (match) {
+            deliver(match, match.pickUpItem(connectionId, playerId, itemId, clock.getAsLong()));
         }
         notifyIfFinished(match);
     }

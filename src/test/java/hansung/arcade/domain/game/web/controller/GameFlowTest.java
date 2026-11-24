@@ -7,6 +7,7 @@ import hansung.arcade.core.net.Json;
 import hansung.arcade.core.net.MessageDispatcher;
 import hansung.arcade.domain.game.business.GameService;
 import hansung.arcade.domain.game.business.GameService.Participant;
+import hansung.arcade.domain.game.model.GameMap;
 import hansung.arcade.domain.game.model.Match;
 import hansung.arcade.domain.game.model.MatchPlayer;
 import hansung.arcade.domain.game.model.Team;
@@ -30,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 실제 소켓으로 GAME_STARTED → LOADED → ROUND_BEGIN → MOVE 중계 → GAME_EXIT·끊김 → GAME_OVER 흐름을 확인한다.
+ * 실제 소켓으로 GAME_STARTED → LOADED → ROUND_BEGIN → MOVE 중계 → 물풍선·아이템 → GAME_EXIT·끊김 → GAME_OVER 흐름을 확인한다.
  * 시계는 테스트가 돌리고, 타이머 대신 {@link GameService#tick}을 직접 부른다.
  */
 class GameFlowTest {
@@ -121,6 +122,42 @@ class GameFlowTest {
         return Json.object().put("playerId", playerId).put("x", x).put("y", y).put("facing", "LEFT").put("moving", true);
     }
 
+    /** (col, row) 칸 가운데로 가는 MOVE */
+    private static JsonNode moveTo(long playerId, int col, int row) {
+        return move(playerId, GameMap.centerX(col), GameMap.centerY(row));
+    }
+
+    /**
+     * 캠프08에서 빨강이 (1,0)에 물풍선을 놓고 (1,2)로 비켜서서 터뜨린다. (0,0) 블럭이 부서져 고정 드롭 신발(itemId 1)이 나온다.
+     * 파랑은 먼저 멀리 (10,10)으로 비켜 둔다. 물줄기가 사라질 때까지 시계를 돌리고 폭발 결과를 돌려준다.
+     */
+    private JsonNode dropShoeAtCorner(Client red, Client blue) throws IOException {
+        blue.send("MOVE", moveTo(2, 10, 10));
+        red.receive("PLAYER_MOVED");
+        red.send("MOVE", moveTo(1, 1, 1));
+        red.send("BALLOON_PLACE", Json.object().put("playerId", 1).put("col", 1).put("row", 0));
+        red.send("MOVE", moveTo(1, 1, 2));
+        blue.receive("BALLOON_PLACED");
+        // 비켜선 MOVE까지 서버가 처리했다
+        blue.receive("PLAYER_MOVED");
+
+        clock.addAndGet(Match.FUSE_MS);
+        gameService.tick();
+        JsonNode exploded = red.receive("BALLOON_EXPLODED").get("body");
+        blue.receive("BALLOON_EXPLODED");
+        clock.addAndGet(Match.FLAME_MS);
+        gameService.tick();
+        return exploded;
+    }
+
+    /** 빨강이 (0,0) 신발 칸으로 가서 줍고, 두 연결이 ITEM_TAKEN을 받을 때까지 기다린다 */
+    private void pickUpShoe(Client red, Client blue) throws IOException {
+        red.send("MOVE", moveTo(1, 0, 0));
+        red.send("ITEM_PICKUP", Json.object().put("playerId", 1).put("itemId", 1));
+        red.receive("ITEM_TAKEN");
+        blue.receive("ITEM_TAKEN");
+    }
+
     private void beginRound(Client red, Client blue) throws IOException {
         red.send("LOADED", Json.object());
         blue.send("LOADED", Json.object());
@@ -201,6 +238,80 @@ class GameFlowTest {
             assertTrue(exploded.get("items").isArray());
             // 놓은 사람은 자기 칸에 서 있었으므로 갇힌다
             assertEquals(1, red.receive("PLAYER_TRAPPED").get("body").get("playerId").asLong());
+        }
+    }
+
+    @Test
+    void 블럭에서_나온_아이템을_ITEM_PICKUP으로_주우면_방_전체가_ITEM_TAKEN을_받고_틀리거나_늦은_요청은_조용히_버린다()
+            throws Exception {
+        try (Client red = new Client(); Client blue = new Client()) {
+            List<Long> ids = connectionIds(2);
+            startMatch(ids.get(0), ids.get(1));
+            beginRound(red, blue);
+
+            JsonNode exploded = dropShoeAtCorner(red, blue);
+            assertEquals(1, exploded.get("items").size());
+            JsonNode item = exploded.get("items").get(0);
+            assertEquals(List.of(1, 0, 0), List.of(item.get("itemId").asInt(), item.get("col").asInt(),
+                    item.get("row").asInt()));
+            assertEquals("shoe", item.get("item").asText());
+            assertEquals(0, exploded.get("removedItems").size());
+
+            red.send("MOVE", moveTo(1, 0, 0));
+            red.send("ITEM_PICKUP", Json.object().put("playerId", 1).put("itemId", "신발"));
+            red.send("ITEM_PICKUP", Json.object().put("playerId", 1).put("itemId", 1));
+            red.send("ITEM_PICKUP", Json.object().put("playerId", 1).put("itemId", 1));
+
+            // 틀린 body에는 ERROR가 없으므로 빨강이 다음에 받는 것은 ITEM_TAKEN이다
+            JsonNode taken = red.receive();
+            assertEquals("ITEM_TAKEN", taken.get("type").asText());
+            JsonNode body = taken.get("body");
+            assertEquals(1, body.get("itemId").asInt());
+            assertEquals(1, body.get("playerId").asLong());
+            assertEquals("shoe", body.get("item").asText());
+            assertEquals(1, body.get("stats").get("balloons").asInt());
+            assertEquals(1, body.get("stats").get("waterRange").asInt());
+            assertEquals(4, body.get("stats").get("speedLevel").asInt());
+            assertTrue(body.get("heldItem").isNull());
+            assertEquals("ITEM_TAKEN", blue.receive("ITEM_TAKEN").get("type").asText());
+            // 늦게 온 두 번째 줍기도 조용히 버렸다. 같은 연결의 메시지는 차례대로 처리되므로,
+            // 그 뒤에 보낸 물풍선의 BALLOON_PLACED가 두 번째 ITEM_TAKEN 없이 바로 온다
+            red.send("BALLOON_PLACE", Json.object().put("playerId", 1).put("col", 0).put("row", 0));
+            assertEquals("BALLOON_PLACED", red.receive().get("type").asText());
+        }
+    }
+
+    @Test
+    void 아이템을_먹은_사람이_터지면_PLAYER_POPPED_바로_뒤에_ITEM_SCATTERED를_받고_그_다음_GAME_OVER를_받는다()
+            throws Exception {
+        try (Client red = new Client(); Client blue = new Client()) {
+            List<Long> ids = connectionIds(2);
+            startMatch(ids.get(0), ids.get(1));
+            beginRound(red, blue);
+            dropShoeAtCorner(red, blue);
+            pickUpShoe(red, blue);
+
+            // 빨강이 선 자리 (0,0)에 물풍선을 놓아 갇히고, 시간이 지나 터진다
+            red.send("BALLOON_PLACE", Json.object().put("playerId", 1).put("col", 0).put("row", 0));
+            red.receive("BALLOON_PLACED");
+            clock.addAndGet(Match.FUSE_MS);
+            gameService.tick();
+            assertEquals(1, red.receive("PLAYER_TRAPPED").get("body").get("playerId").asLong());
+            clock.addAndGet(Match.POP_MS);
+            gameService.tick();
+
+            for (Client client : List.of(red, blue)) {
+                assertEquals(1, client.receive("PLAYER_POPPED").get("body").get("playerId").asLong());
+                JsonNode scattered = client.receive();
+                assertEquals("ITEM_SCATTERED", scattered.get("type").asText());
+                JsonNode body = scattered.get("body");
+                assertEquals(List.of(1L, 0L, 0L), List.of(body.get("playerId").asLong(), body.get("col").asLong(),
+                        body.get("row").asLong()));
+                assertEquals(1, body.get("items").size());
+                assertEquals("shoe", body.get("items").get(0).get("item").asText());
+                assertEquals(2, body.get("items").get(0).get("itemId").asInt());
+                assertEquals("GAME_OVER", client.receive().get("type").asText());
+            }
         }
     }
 
