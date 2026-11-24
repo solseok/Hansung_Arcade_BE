@@ -1,5 +1,6 @@
 package hansung.arcade.domain.game.model;
 
+import hansung.arcade.domain.game.model.MatchMessages.AirplaneAppeared;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonExploded;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonPlaced;
 import hansung.arcade.domain.game.model.MatchMessages.ChangedTile;
@@ -7,6 +8,7 @@ import hansung.arcade.domain.game.model.MatchMessages.DroppedItem;
 import hansung.arcade.domain.game.model.MatchMessages.ExplodedBalloon;
 import hansung.arcade.domain.game.model.MatchMessages.GameOver;
 import hansung.arcade.domain.game.model.MatchMessages.GameStarted;
+import hansung.arcade.domain.game.model.MatchMessages.ItemDropped;
 import hansung.arcade.domain.game.model.MatchMessages.ItemScattered;
 import hansung.arcade.domain.game.model.MatchMessages.ItemTaken;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerLeft;
@@ -26,6 +28,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -47,6 +50,9 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * GAME_STARTED → (모든 연결 LOADED 또는 {@link #LOAD_TIMEOUT_MS}) → ROUND_BEGIN
  * → {@link #COUNTDOWN_MS} 뒤 PLAYING → (남은 팀 하나 · 모두 터짐 · {@link #TIME_LIMIT_MS}) → GAME_OVER
  * </pre>
+ *
+ * <p>PLAYING 동안 남은 시간이 {@link AirDrop#APPEARANCES_MS}가 되면 비행기가 나와(AIRPLANE_APPEARED) 맵을 가로지르며
+ * 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED).</p>
  *
  * <p>모든 public 메서드는 이 객체로 잠근다. 받는 스레드(MOVE 등)와 타이머 스레드(tick)가 함께 부른다.</p>
  */
@@ -87,6 +93,13 @@ public final class Match {
     private final RandomGenerator random;
     /** 경기를 열 때의 인원 (한 연결의 1P·2P는 두 명). 블럭에서 아이템이 나올 확률을 정한다 */
     private final int playerCount;
+    /** 비행기가 떨어뜨릴 칸을 고른다 */
+    private final AirDrop airDrop;
+    /** 아직 떨어뜨릴 칸이 남은 비행기들. 나온 순서 */
+    private final List<Airplane> airplanes = new ArrayList<>();
+    /** 다음에 나올 비행기의 {@link AirDrop#APPEARANCES_MS} 차례 */
+    private int nextAppearance;
+    private int lastAirplaneId;
 
     private Phase phase = Phase.LOADING;
     private long loadDeadline;
@@ -106,6 +119,7 @@ public final class Match {
         this.map = map;
         this.random = Objects.requireNonNull(random);
         this.playerCount = participants.size();
+        this.airDrop = new AirDrop(map, this.random, participants.size());
         for (MatchPlayer player : participants) {
             if (players.putIfAbsent(player.playerId(), player) != null) {
                 throw new IllegalArgumentException("playerId가 겹칩니다: " + player.playerId());
@@ -314,6 +328,7 @@ public final class Match {
             balloons.clear();
             flames.clear();
             items.clear();
+            airplanes.clear();
             return;
         }
         // 한 팀만 남았으면 로딩 중이어도 ROUND_BEGIN 없이 바로 끝낸다
@@ -343,6 +358,9 @@ public final class Match {
                 finishIfDecided(events);
                 if (phase == Phase.PLAYING && now >= endsAt) {
                     finish("TIME_UP", events);
+                }
+                if (phase == Phase.PLAYING) {
+                    flyAirplanes(now, events);
                 }
             }
             case FINISHED -> {
@@ -665,7 +683,82 @@ public final class Match {
         balloons.clear();
         flames.clear();
         items.clear();
+        airplanes.clear();
         events.add(toAll(MatchMessages.GAME_OVER, new GameOver(reason, standings)));
+    }
+
+    /**
+     * 남은 시간이 출현 시각이 된 비행기를 띄우고, 날고 있는 비행기가 지나친 칸에 아이템을 떨어뜨린다.
+     * PLAYING일 때만 부른다. 경기가 끝나면 새로 나오지도, 떨어뜨리지도 않는다 (클라이언트 {@code AirDrop}과 같다).
+     * 출현 시각보다 {@link AirDrop#LATE_SKIP_MS} 이상 늦은 tick이면 그 비행기는 건너뛴다.
+     */
+    private void flyAirplanes(long now, List<MatchEvent> events) {
+        List<Long> appearances = AirDrop.APPEARANCES_MS;
+        while (nextAppearance < appearances.size() && endsAt - now <= appearances.get(nextAppearance)) {
+            long appearAt = endsAt - appearances.get(nextAppearance);
+            nextAppearance++;
+            if (now - appearAt < AirDrop.LATE_SKIP_MS) {
+                launchAirplane(now, events);
+            }
+        }
+        for (Iterator<Airplane> it = airplanes.iterator(); it.hasNext(); ) {
+            Airplane airplane = it.next();
+            while (!airplane.drops().isEmpty() && airplane.drops().get(0).passAt() <= now) {
+                release(airplane.airplaneId(), airplane.drops().remove(0).drop(), now, events);
+            }
+            if (airplane.drops().isEmpty()) {
+                it.remove();
+            }
+        }
+    }
+
+    /** 비행기를 띄운다. 떨어뜨릴 칸은 지금 맵으로 고르고({@link AirDrop#plan}), 지나가는 순서로 줄 세운다 */
+    private void launchAirplane(long now, List<MatchEvent> events) {
+        int airplaneId = ++lastAirplaneId;
+        Facing heading = AirDrop.headingOf(airplaneId - 1);
+        List<PassingDrop> drops = new ArrayList<>();
+        for (AirDrop.Drop drop : airDrop.plan()) {
+            drops.add(new PassingDrop(drop, now + AirDrop.passMs(map, heading, drop.col())));
+        }
+        drops.sort(Comparator.comparingLong(PassingDrop::passAt));
+        airplanes.add(new Airplane(airplaneId, drops));
+        events.add(toAll(MatchMessages.AIRPLANE_APPEARED, new AirplaneAppeared(airplaneId, heading.name())));
+    }
+
+    /**
+     * 비행기가 drop 칸의 열을 지나는 순간. 칸이 비어 있으면 아이템을 놓고 ITEM_DROPPED로 알린다.
+     * 서버는 이때부터 아이템이 맵에 있다고 본다. 클라이언트는 fallMs 동안 떨어지는 모습을 보여 준 뒤 놓는다.
+     */
+    private void release(int airplaneId, AirDrop.Drop drop, long now, List<MatchEvent> events) {
+        Cell cell = new Cell(drop.col(), drop.row());
+        if (!canDropAt(cell, now)) {
+            return;
+        }
+        DroppedItem placed = placeItem(cell, drop.item());
+        events.add(toAll(MatchMessages.ITEM_DROPPED, new ItemDropped(airplaneId, placed.itemId(), placed.col(),
+                placed.row(), placed.item(), AirDrop.fallMs(cell.row()))));
+    }
+
+    /**
+     * 비행기가 지나가는 순간 이 칸에 떨어뜨릴 수 있는지. 아래 중 하나라도 있으면 떨어뜨리지 않는다 (덤불 칸은 떨어뜨린다).
+     * <ul>
+     *   <li>막힌 칸 (블럭·집 등 지나갈 수 없는 칸, 맵 바깥)</li>
+     *   <li>물풍선, 이미 놓인 아이템</li>
+     *   <li>물줄기가 남은 칸. 클라이언트는 물줄기 칸의 아이템을 바로 지운다</li>
+     *   <li>경기 중인 사람(살아 있거나 갇힌 사람)의 몸이 조금이라도 걸친 칸</li>
+     * </ul>
+     */
+    private boolean canDropAt(Cell cell, long now) {
+        if (map.isSolid(cell.col(), cell.row()) || balloonAt(cell) != null || itemAt(cell) != null
+                || flameAt(cell, now) != null) {
+            return false;
+        }
+        for (MatchPlayer player : players.values()) {
+            if (player.isInPlay() && player.overlaps(cell)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 이 연결의 플레이어. 다른 연결의 playerId면 null */
@@ -727,5 +820,13 @@ public final class Match {
 
     /** 맵 바닥에 놓인 아이템 */
     private record FieldItem(int itemId, ItemType type, Cell cell) {
+    }
+
+    /** 날고 있는 비행기. drops는 아직 지나가지 않은 칸이고, 지나가는 순서다 */
+    private record Airplane(int airplaneId, List<PassingDrop> drops) {
+    }
+
+    /** 비행기가 떨어뜨리려는 칸과, 떨어뜨리는 자리가 그 열을 지나는 시각 */
+    private record PassingDrop(AirDrop.Drop drop, long passAt) {
     }
 }

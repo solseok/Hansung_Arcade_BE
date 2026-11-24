@@ -18,6 +18,10 @@ public final class MatchMessages {
     public static final String ITEM_TAKEN = "ITEM_TAKEN";
     /** 터진 사람이 먹은 아이템을 흩뿌렸다. Notion에 아직 없는 메시지라 제안한 모양이다 */
     public static final String ITEM_SCATTERED = "ITEM_SCATTERED";
+    /** 비행기가 나와 맵 위를 가로지르기 시작했다 */
+    public static final String AIRPLANE_APPEARED = "AIRPLANE_APPEARED";
+    /** 비행기가 지나가며 칸에 아이템을 떨어뜨렸다 */
+    public static final String ITEM_DROPPED = "ITEM_DROPPED";
     public static final String PLAYER_LEFT = "PLAYER_LEFT";
     public static final String GAME_OVER = "GAME_OVER";
 
@@ -87,6 +91,16 @@ public final class MatchMessages {
      * @param items 흩뿌려 맵에 놓인 아이템
      */
     public record ItemScattered(long playerId, int col, int row, List<DroppedItem> items) {
+    }
+
+    /** @param heading 나는 방향. RIGHT(왼쪽에서 오른쪽) 또는 LEFT */
+    public record AirplaneAppeared(int airplaneId, String heading) {
+    }
+
+    /**
+     * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 서버는 보낸 순간부터 아이템이 맵에 있다고 본다
+     */
+    public record ItemDropped(int airplaneId, int itemId, int col, int row, String item, long fallMs) {
     }
 
     public record PlayerLeft(List<Long> playerIds, String reason) {

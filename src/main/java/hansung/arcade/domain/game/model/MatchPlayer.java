@@ -21,6 +21,11 @@ public final class MatchPlayer {
         LEFT
     }
 
+    /** 충돌 박스의 반 너비(px). 한 칸보다 양쪽 2px씩 작다 (클라이언트 {@code Player.HALF_HITBOX}) */
+    static final double HALF_HITBOX = GameMap.TILE_SIZE / 2.0 - 2;
+    /** 충돌 박스가 칸 경계에 딱 맞닿은 것을 걸친 것으로 보지 않게 빼는 값 (클라이언트 {@code Player.EPSILON}) */
+    private static final double EDGE = 1e-6;
+
     private final long playerId;
     private final long connectionId;
     private final String nickname;
@@ -103,6 +108,15 @@ public final class MatchPlayer {
 
     public boolean moving() {
         return moving;
+    }
+
+    /**
+     * 충돌 박스가 cell에 조금이라도 걸쳤는지. 칸 경계에 딱 맞닿은 것은 걸친 것으로 보지 않는다
+     * (클라이언트 {@code Player.overlapsTile}과 같다)
+     */
+    public boolean overlaps(Cell cell) {
+        return cell.col() >= GameMap.colAt(x - HALF_HITBOX) && cell.col() <= GameMap.colAt(x + HALF_HITBOX - EDGE)
+                && cell.row() >= GameMap.rowAt(y - HALF_HITBOX) && cell.row() <= GameMap.rowAt(y + HALF_HITBOX - EDGE);
     }
 
     /** 충돌 박스 중심이 있는 칸 */
