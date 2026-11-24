@@ -238,7 +238,7 @@ class MatchActiveItemTest {
 
         assertEquals(List.of(MatchMessages.ITEM_USED), types(events));
         assertEquals(List.of(CONN_RED, CONN_BLUE), events.get(0).recipients());
-        assertEquals(new ItemUsed(RED, "needle", null, null, null, 0), events.get(0).body());
+        assertEquals(new ItemUsed(RED, "needle", null, null, null, null, 0), events.get(0).body());
         MatchPlayer red = match.player(RED);
         assertEquals(MatchPlayer.State.ALIVE, red.state());
         assertTrue(red.isEscaping(usedAt + Match.ESCAPE_MS - 1));
@@ -291,7 +291,7 @@ class MatchActiveItemTest {
         List<MatchEvent> events = match.useItem(CONN_RED, RED, ItemType.SHIELD, PLAY);
 
         assertEquals(List.of(MatchMessages.ITEM_USED), types(events));
-        assertEquals(new ItemUsed(RED, "shield", Match.SHIELD_MS, null, null, 0), events.get(0).body());
+        assertEquals(new ItemUsed(RED, "shield", Match.SHIELD_MS, null, null, null, 0), events.get(0).body());
         assertEquals(3_000, Match.SHIELD_MS);
         // 보호막이 끝나기 200ms 전에 발밑 물풍선이 터진다. 물줄기는 보호막이 끝난 뒤 250ms 더 남는다
         long shieldEnds = PLAY + Match.SHIELD_MS;
@@ -414,7 +414,7 @@ class MatchActiveItemTest {
 
         assertEquals(List.of(MatchMessages.ITEM_USED), types(events));
         assertEquals(List.of(CONN_RED, CONN_BLUE), events.get(0).recipients());
-        assertEquals(new ItemUsed(RED, "spring_shoe", Match.JUMP_MS, 6, 2, 0), events.get(0).body());
+        assertEquals(new ItemUsed(RED, "spring_shoe", Match.JUMP_MS, 6, 2, null, 0), events.get(0).body());
         assertEquals(400, Match.JUMP_MS);
         // 서버가 위치를 내려앉을 칸 가운데로 옮긴다
         MatchPlayer red = match.player(RED);
@@ -430,7 +430,9 @@ class MatchActiveItemTest {
         red.takeItem(ItemType.SPRING_SHOE);
         red.takeItem(ItemType.SPRING_SHOE);
         moveRed(match, 4, 2, Facing.RIGHT, PLAY);
-        match.useItem(CONN_RED, RED, ItemType.SPRING_SHOE, PLAY);
+        // 둘 들고 하나를 쓰면 ITEM_USED가 손에 남은 것을 알려 준다
+        assertEquals(new ItemUsed(RED, "spring_shoe", Match.JUMP_MS, 6, 2, "spring_shoe", 1),
+                used(match.useItem(CONN_RED, RED, ItemType.SPRING_SHOE, PLAY)));
         long midAir = PLAY + Match.JUMP_MS / 2;
 
         assertEquals(List.of(), match.move(CONN_RED, RED, cx(7), cy(2), Facing.RIGHT, true, midAir));
@@ -471,6 +473,27 @@ class MatchActiveItemTest {
 
         assertEquals(List.of(MatchMessages.PLAYER_TRAPPED), types(landed));
         assertEquals(MatchPlayer.State.TRAPPED, match.player(RED).state());
+    }
+
+    @Test
+    void 물줄기가_남은_칸을_뛰어넘어_마른_칸에_내려앉으면_갇히지_않는다() {
+        Match match = playing();
+        match.player(RED).takeItem(ItemType.SPRING_SHOE);
+        // 파랑이 (4,2)에 물풍선을 놓아 터뜨린다. 물줄기는 (4,2)·(3,2)·(4,1)·(4,3)을 덮는다 (오른쪽 (5,2)는 동상)
+        match.move(CONN_BLUE, BLUE, cx(4), cy(2), Facing.LEFT, false, PLAY);
+        match.placeBalloon(CONN_BLUE, BLUE, 4, 2, PLAY);
+        match.move(CONN_BLUE, BLUE, cx(8), cy(4), Facing.LEFT, false, PLAY);
+        match.tick(PLAY + Match.FUSE_MS);
+        // 빨강은 마른 (3,3)에서 위로 뛰어 물줄기가 남은 (3,2)를 넘고 마른 (3,1)에 내려앉는다
+        long jumpedAt = PLAY + Match.FUSE_MS + 50;
+        moveRed(match, 3, 3, Facing.UP, jumpedAt);
+        assertEquals(1, match.useItem(CONN_RED, RED, ItemType.SPRING_SHOE, jumpedAt).size());
+
+        List<MatchEvent> landed = match.tick(jumpedAt + Match.JUMP_MS);
+
+        assertEquals(List.of(), types(landed));
+        assertEquals(MatchPlayer.State.ALIVE, match.player(RED).state());
+        assertEquals(List.of(cx(3), cy(1)), List.of(match.player(RED).x(), match.player(RED).y()));
     }
 
     @Test
@@ -564,7 +587,7 @@ class MatchActiveItemTest {
         long now = dropNeedleAndShield(match);
         match.player(RED).takeItem(ItemType.SPRING_SHOE);
         moveRed(match, 2, 2, Facing.UP, now);
-        assertEquals(new ItemUsed(RED, "spring_shoe", Match.JUMP_MS, 2, 0, 0),
+        assertEquals(new ItemUsed(RED, "spring_shoe", Match.JUMP_MS, 2, 0, null, 0),
                 used(match.useItem(CONN_RED, RED, ItemType.SPRING_SHOE, now)));
         // 공중에서는 줍지 못한다
         assertEquals(List.of(), match.pickUpItem(CONN_RED, RED, 2, now + 100));
@@ -614,7 +637,7 @@ class MatchActiveItemTest {
         assertEquals(List.of(cx(4), cy(2)), List.of(red.x(), red.y()));
         // (3,2)에서 위로는 (3,0) 바닥에 내려앉는다
         moveRed(match, 3, 2, Facing.UP, PLAY);
-        assertEquals(new ItemUsed(RED, "spring_shoe", Match.JUMP_MS, 3, 0, 0),
+        assertEquals(new ItemUsed(RED, "spring_shoe", Match.JUMP_MS, 3, 0, null, 0),
                 used(match.useItem(CONN_RED, RED, ItemType.SPRING_SHOE, PLAY)));
     }
 

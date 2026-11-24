@@ -296,9 +296,13 @@ public final class Match {
         items.remove(item.itemId());
         taker.takeItem(item.type());
         Stats stats = new Stats(taker.balloonCapacity(), taker.waterRange(), taker.speedLevel());
-        String held = taker.heldItem() == null ? null : taker.heldItem().id();
-        return toAll(MatchMessages.ITEM_TAKEN,
-                new ItemTaken(item.itemId(), taker.playerId(), item.type().id(), stats, held, taker.heldCount()));
+        return toAll(MatchMessages.ITEM_TAKEN, new ItemTaken(item.itemId(), taker.playerId(), item.type().id(), stats,
+                heldId(taker), taker.heldCount()));
+    }
+
+    /** 손에 든 액티브 아이템의 id. 빈손이면 null */
+    private static String heldId(MatchPlayer player) {
+        return player.heldItem() == null ? null : player.heldItem().id();
     }
 
     /** 살아 있는 사람이 선 칸에 아이템이 있으면 줍는다. 갇혔다가 풀리거나 내려앉아 칸에 "들어가지" 않고 서게 됐을 때 부른다 */
@@ -350,7 +354,8 @@ public final class Match {
         };
         Cell landing = item == ItemType.SPRING_SHOE ? user.cell() : null;
         events.add(toAll(MatchMessages.ITEM_USED, new ItemUsed(user.playerId(), item.id(), durationMs,
-                landing == null ? null : landing.col(), landing == null ? null : landing.row(), user.heldCount())));
+                landing == null ? null : landing.col(), landing == null ? null : landing.row(), heldId(user),
+                user.heldCount())));
         if (item == ItemType.NEEDLE) {
             // 클라이언트는 갇힌 동안 보낸 ITEM_PICKUP이 버려졌어도 그 칸에서 다시 보내지 않는다 (구출과 같다)
             pickUpUnderfoot(user, events);

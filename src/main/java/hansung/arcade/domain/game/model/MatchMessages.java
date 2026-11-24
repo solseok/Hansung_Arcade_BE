@@ -93,9 +93,11 @@ public final class MatchMessages {
      * @param durationMs 효과가 이어지는 시간 (보호막, 스프링 신발 점프). 바늘은 바로 빠져나오기 시작하므로 null
      * @param col        스프링 신발이 내려앉을 칸. 다른 아이템은 null
      * @param row        스프링 신발이 내려앉을 칸. 다른 아이템은 null
+     * @param heldItem   쓰고 손에 남은 아이템. 다 썼으면 null
      * @param heldCount  쓰고 남은 개수. 0이면 손이 비었다
      */
-    public record ItemUsed(long playerId, String item, Long durationMs, Integer col, Integer row, int heldCount) {
+    public record ItemUsed(long playerId, String item, Long durationMs, Integer col, Integer row, String heldItem,
+                           int heldCount) {
     }
 
     /** 아이템을 먹은 뒤의 능력치 */

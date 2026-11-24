@@ -388,6 +388,7 @@ class GameFlowTest {
                 assertEquals("spring_shoe", body.get("item").asText());
                 assertEquals(Match.JUMP_MS, body.get("durationMs").asLong());
                 assertEquals(List.of(3, 8), List.of(body.get("col").asInt(), body.get("row").asInt()));
+                assertTrue(body.get("heldItem").isNull());
                 assertEquals(0, body.get("heldCount").asInt());
             }
 
