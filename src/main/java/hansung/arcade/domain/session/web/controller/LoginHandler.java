@@ -1,7 +1,6 @@
 package hansung.arcade.domain.session.web.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
-
 import hansung.arcade.core.net.Connection;
 import hansung.arcade.core.net.ErrorCode;
 import hansung.arcade.core.net.Message;
@@ -42,8 +41,7 @@ public final class LoginHandler implements MessageHandler {
                 sessionService.requireBeforeLogin(session);
                 requireStringArray(request.body().get("nicknames"));
                 LoginRequest body = request.bodyAs(LoginRequest.class);
-                LoginResponse response =
-                        LoginResponse.from(sessionService.login(session, body.nicknames()));
+                LoginResponse response = LoginResponse.from(sessionService.login(session, body.nicknames()));
                 if (request.expectsResponse() && !connection.isClosed()) {
                     connection.send(Message.ok(request, response));
                 }
@@ -54,7 +52,10 @@ public final class LoginHandler implements MessageHandler {
         }
     }
 
-    /** Jackson은 숫자·true를 문자열로 바꿔 주므로("true"라는 닉네임이 된다) 바인딩 전에 모양을 직접 본다. 빠진 경우는 서비스가 개수 오류로 알린다. */
+    /**
+     * Jackson은 숫자·true를 문자열로 바꿔 주므로("true"라는 닉네임이 된다) 바인딩 전에 모양을 직접 본다.
+     * 빠진 경우는 서비스가 개수 오류로 알린다.
+     */
     private static void requireStringArray(JsonNode nicknames) throws ProtocolException {
         if (nicknames == null || nicknames.isNull()) {
             return;

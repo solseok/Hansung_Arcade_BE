@@ -11,7 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 5단계(마지막): 연결 리스너(세션 만들기·정리, 경기 푸시 대상, 경기 중 끊김 정리)를 걸고 접속을 받기 시작한다. Ctrl+C 등으로 JVM이 끝날 때 모든 연결을 닫도록 종료 훅도 건다.
+ * 5단계: 세션·송신 대상·방 정리·경기 정리 리스너를 순서대로 연결하고 접속을 받는다.
  */
 public final class AcceptStep implements BootStep {
 

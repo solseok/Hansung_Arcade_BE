@@ -25,8 +25,8 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * 연결 하나의 일생: 접속(세션 만들기) → LOGIN(닉네임 검사·등록) → 끊김(닉네임 풀기).
  * 네트워크 계층을 모르고, 실패는 {@link GameException}으로 알린다.
  *
- * <p>lock 순서는 세션 → 저장소 하나뿐이다. 방·로비 API를 더할 때 세션이나 방을 잠근 채 다른 연결에 보내지 않는다
- * (받는 쪽 송신 큐가 넘치면 그 자리에서 그 연결의 정리가 돌아 lock이 엇갈릴 수 있다). 보낼 대상만 모아 lock 밖에서 보낸다.
+ * <p>세션 → 저장소 순서로 잠근다. 로그인 핸들러는 세션 잠금 안에서 로그인 응답을 넣어
+ * 로비 알림보다 먼저 가도록 한다. 방 상태와 퇴장은 RoomService가 별도로 관리한다.
  */
 public final class SessionService {
 
@@ -119,7 +119,7 @@ public final class SessionService {
 
     /**
      * 연결이 끝났을 때 부른다 (BYE, 상대가 닫음, 15초 무응답, 서버 종료 모두). 여러 번 불려도 정리는 한 번만 한다.
-     * 방 API를 만들면 여기서 방 나가기·방장 넘기기·게임 중 탈락도 한다.
+     * 방 퇴장은 RoomListener, 경기 탈락은 GameListener가 같은 executor에서 순서대로 처리한다.
      */
     public void close(Session session) {
         List<Player> released;
