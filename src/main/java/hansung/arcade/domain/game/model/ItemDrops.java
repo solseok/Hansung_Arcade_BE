@@ -40,7 +40,6 @@ final class ItemDrops {
     /**
      * players명 경기에서 블럭 하나가 다 부서졌을 때 나올 아이템. 난수를 두 번까지 쓴다 (나오는지, 무엇인지).
      *
-     * @param dropChance 아이템이 나올 확률 ({@link #dropChanceFor(int)})
      * @return 나온 아이템. 액티브 아이템일 수도 있다. 안 나오면 비어 있다
      */
     static Optional<ItemType> roll(RandomGenerator random, int players) {
