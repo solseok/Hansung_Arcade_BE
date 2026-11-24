@@ -17,7 +17,11 @@ import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
-/** 방 변경과 응답/푸시를 하나의 잠금 안에서 순서대로 송신 큐에 넣는다. */
+/**
+ * 전역 잠금 하나로 방 번호, 정원과 로비 목록의 일관성을 보장한다.
+ * 응답과 푸시도 잠금 안에서 송신 큐에 넣어 모든 연결에 같은 변경 순서를 보장한다.
+ * 경기 시작까지 잠금을 유지하여 시작 도중 퇴장한 참가자가 경기에 남지 않게 한다.
+ */
 public final class RoomService {
     private static final Logger log = LoggerFactory.getLogger(RoomService.class);
     static final int MAX_ROOMS = 100, MAX_CHATS_PER_WINDOW = 3;
@@ -231,8 +235,7 @@ public final class RoomService {
             map = room.mapId();
             room.startPlaying();
             reply.accept(null);
-        }
-        // 경기 잠금과 방 잠금의 역순 획득을 피한다.
+        // 방 잠금을 유지해 시작 도중 참가자가 빠지는 틈을 막는다.
         Match match;
         try {
             match = games.start(map, participants);
@@ -255,6 +258,8 @@ public final class RoomService {
             } else matches.put(match.matchId(), room);
             lobby();
         }
+    }
+
     }
 
     public void finishGame(long matchId) {
@@ -337,7 +342,7 @@ public final class RoomService {
 
     private void lobby() {
         sender.sendToLobby(
-                List.copyOf(memberships.keySet()),
+                Set.copyOf(memberships.keySet()),
                 RoomMessages.LOBBY_ROOMS,
                 RoomMessages.list(rooms.values()));
     }

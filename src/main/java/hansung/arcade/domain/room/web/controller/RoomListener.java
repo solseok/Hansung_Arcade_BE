@@ -28,9 +28,12 @@ public final class RoomListener implements ConnectionListener {
     public void onClose(Connection connection, String reason) {
         long connectionId = connection.id();
         try {
-            executor.execute(() -> roomService.disconnect(connectionId));
+            executor.execute(() -> {
+                try { roomService.disconnect(connectionId); }
+                catch (RuntimeException e) { log.error("#{} 방 정리 실패", connectionId, e); }
+            });
         } catch (RejectedExecutionException e) {
-            // 서버가 꺼지는 중이다. 경기도 함께 사라지므로 정리할 것이 없다
+            // 서버가 꺼지는 중이다. 방도 함께 사라지므로 정리할 것이 없다
             log.debug("#{} 방 정리를 건너뜀 (서버 종료 중)", connectionId);
         }
     }

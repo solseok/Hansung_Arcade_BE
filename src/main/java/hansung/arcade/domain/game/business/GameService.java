@@ -60,7 +60,7 @@ public final class GameService {
     private final AtomicLong lastMatchId = new AtomicLong();
 
     /** 끝났지만 아직 {@link #finishedListener}에 알리지 않은 경기 */
-    private final Object notificationLock = new Object();
+
 
     /** 끝났지만 아직 종료 리스너에 알리지 않은 경기 */
     private final Set<Match> pendingFinished = ConcurrentHashMap.newKeySet();
@@ -148,13 +148,21 @@ public final class GameService {
 
         Set<Long> connections = new HashSet<>(match.connectionIds());
         Set<Long> disconnected = new HashSet<>();
-        for (long id : connections) if (!sender.isConnected(id)) disconnected.add(id);
+
         synchronized (match) {
             for (Long connectionId : connections) {
                 if (byConnection.putIfAbsent(connectionId, match) != null) {
                     connections.forEach(id -> byConnection.remove(id, match));
                     throw new IllegalArgumentException("이미 경기 중인 연결입니다: #" + connectionId);
                 }
+            }
+            try {
+                for (long id : connections) {
+                    if (!sender.isConnected(id)) { disconnected.add(id); }
+                }
+            } catch (RuntimeException e) {
+                connections.forEach(id -> byConnection.remove(id, match));
+                throw e;
             }
             matches.add(match);
             log.info("경기 #{} 시작: {} {}명", match.matchId(), actualMapId, players.size());
@@ -222,7 +230,11 @@ public final class GameService {
      * @throws GameException 경기 중이 아니면 WRONG_STATE. 확인한 직후 타이머가 경기를 끝낸 경우도 포함한다
      */
     public void exit(long connectionId) {
-        exitListener.accept(connectionId);
+        try {
+            exitListener.accept(connectionId);
+        } catch (RuntimeException e) {
+            log.error("#{} 게임 나가기의 방 정리 실패", connectionId, e);
+        }
         Match match = requireMatch(connectionId);
         synchronized (match) {
             if (!match.includes(connectionId)) {
@@ -248,20 +260,25 @@ public final class GameService {
     /** 타이머가 수십 ms마다 부른다. 경기 하나가 실패해도 나머지는 계속 돈다 */
     public void tick() {
         for (Match match : matches) {
-            synchronized (notificationLock) {
-                try {
-                    List<Long> dropped;
-                    synchronized (match) {
-                        List<Long> before = match.connectionIds();
-                        deliver(match, match.tick(clock.getAsLong()));
-                        List<Long> after = match.connectionIds();
-                        dropped = before.stream().filter(id -> !after.contains(id)).toList();
-                    }
-                    dropped.forEach(droppedListener::accept);
-                    notifyIfFinished(match);
-                } catch (RuntimeException e) {
-                    log.error("경기 #{} 타이머 처리 중 오류", match.matchId(), e);
+            try {
+                List<Long> dropped;
+                synchronized (match) {
+                    List<Long> before = match.connectionIds();
+                    deliver(match, match.tick(clock.getAsLong()));
+                    List<Long> after = match.connectionIds();
+                    dropped = before.stream().filter(id -> !after.contains(id)).toList();
                 }
+                for (long id : dropped) {
+                    try {
+                        droppedListener.accept(id);
+                    } catch (RuntimeException e) {
+                        log.error("#{} 로딩 초과 방 정리 실패", id, e);
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.error("경기 #{} 타이머 처리 중 오류", match.matchId(), e);
+            } finally {
+                notifyIfFinished(match);
             }
         }
     }
@@ -312,13 +329,11 @@ public final class GameService {
      * 채 부르면 lock 순서가 엇갈릴 수 있다.
      */
     private void notifyIfFinished(Match match) {
-        synchronized (notificationLock) {
-            if (pendingFinished.remove(match)) {
-                try {
-                    finishedListener.accept(match);
-                } catch (RuntimeException e) {
-                    log.error("경기 #{} 종료 처리 중 오류", match.matchId(), e);
-                }
+        if (pendingFinished.remove(match)) {
+            try {
+                finishedListener.accept(match);
+            } catch (RuntimeException e) {
+                log.error("경기 #{} 종료 처리 중 오류", match.matchId(), e);
             }
         }
     }

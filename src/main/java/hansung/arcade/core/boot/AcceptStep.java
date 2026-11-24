@@ -29,6 +29,7 @@ public final class AcceptStep implements BootStep {
         server.addListener(context.get(ConnectionListener.class));
         server.addListener(context.get(GameConnections.class));
         server.addListener(context.get(RoomConnections.class));
+        // 같은 단일 스레드에서 방 정리가 먼저 실행되어 퇴장 안내가 PLAYER_LEFT보다 먼저 간다.
         server.addListener(context.get(RoomListener.class));
         server.addListener(context.get(GameListener.class));
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("shutdown").unstarted(server::close));
