@@ -1,6 +1,8 @@
 package hansung.arcade.core.boot;
 
 import hansung.arcade.core.net.ConnectionListener;
+import hansung.arcade.domain.room.web.controller.RoomConnections;
+import hansung.arcade.domain.room.web.controller.RoomListener;
 import hansung.arcade.core.net.GameServer;
 import hansung.arcade.core.server.ServerContext;
 import hansung.arcade.domain.game.web.controller.GameConnections;
@@ -26,6 +28,8 @@ public final class AcceptStep implements BootStep {
         // 첫 접속보다 먼저 걸어야 모든 연결에 세션이 붙는다
         server.addListener(context.get(ConnectionListener.class));
         server.addListener(context.get(GameConnections.class));
+        server.addListener(context.get(RoomConnections.class));
+        server.addListener(context.get(RoomListener.class));
         server.addListener(context.get(GameListener.class));
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("shutdown").unstarted(server::close));
         server.start();

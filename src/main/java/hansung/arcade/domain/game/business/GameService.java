@@ -1,5 +1,7 @@
 package hansung.arcade.domain.game.business;
 
+import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
+
 import hansung.arcade.domain.game.model.Cell;
 import hansung.arcade.domain.game.model.Facing;
 import hansung.arcade.domain.game.model.GameMap;
@@ -11,6 +13,7 @@ import hansung.arcade.domain.game.model.MatchEvent;
 import hansung.arcade.domain.game.model.MatchPlayer;
 import hansung.arcade.domain.game.model.Team;
 import hansung.arcade.global.exception.GameException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,18 +29,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
-
-import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
 
 /**
  * 진행 중인 경기들을 들고, 인게임 메시지와 타이머를 해당 {@link Match}로 넘긴다.
  *
- * <p>경기 하나의 판정과 푸시 보내기는 그 경기 lock 안에서 함께 한다. 그래서 받는 스레드(MOVE 등)와 타이머 스레드에서
- * 생긴 푸시가 판정 순서대로 나간다. {@link EventSender}는 송신 큐에 넣기만 하므로 lock을 오래 잡지 않는다.</p>
+ * <p>경기 하나의 판정과 푸시 보내기는 그 경기 lock 안에서 함께 한다. 그래서 받는 스레드(MOVE 등)와 타이머 스레드에서 생긴 푸시가 판정 순서대로 나간다.
+ * {@link EventSender}는 송신 큐에 넣기만 하므로 lock을 오래 잡지 않는다.
  *
- * <p>방 API가 아직 없으므로 경기는 {@link #start}로 직접 연다. 방을 만들면 GAME_START 처리에서 이것을 부르고,
- * {@link #onFinished}로 경기가 끝난 방을 대기 상태로 돌린다.</p>
+ * <p>방의 GAME_START 처리에서 {@link #start}로 경기를 열고, {@link #onFinished}로 경기가 끝난 방을 대기 상태로 돌린다.
  */
 public final class GameService {
 
@@ -48,8 +49,8 @@ public final class GameService {
      *
      * @param character 캐릭터 id 또는 {@code random}
      */
-    public record Participant(long playerId, long connectionId, String nickname, String character, Team team) {
-    }
+    public record Participant(
+            long playerId, long connectionId, String nickname, String character, Team team) {}
 
     private final EventSender sender;
     private final LongSupplier clock;
@@ -57,10 +58,15 @@ public final class GameService {
     private final List<Match> matches = new CopyOnWriteArrayList<>();
     private final Map<Long, Match> byConnection = new ConcurrentHashMap<>();
     private final AtomicLong lastMatchId = new AtomicLong();
+
     /** 끝났지만 아직 {@link #finishedListener}에 알리지 않은 경기 */
+    private final Object notificationLock = new Object();
+
+    /** 끝났지만 아직 종료 리스너에 알리지 않은 경기 */
     private final Set<Match> pendingFinished = ConcurrentHashMap.newKeySet();
-    private volatile Consumer<Match> finishedListener = match -> {
-    };
+    private volatile LongConsumer exitListener = id -> {};
+    private volatile LongConsumer droppedListener = id -> {};
+    private volatile Consumer<Match> finishedListener = match -> {};
 
     /**
      * @param clock 지금 시각(ms). 단조 증가하면 된다
@@ -71,7 +77,17 @@ public final class GameService {
         this.random = Objects.requireNonNull(random);
     }
 
-    /** 경기가 끝나면(GAME_OVER를 보낸 뒤, 또는 모두 나가서) 불린다. 방 API가 방을 대기 상태로 돌릴 때 쓴다 */
+    /** GAME_EXIT에서 경기 존재 여부를 확인하기 전에 방을 정리한다. */
+    public void onExit(LongConsumer listener) {
+        exitListener = Objects.requireNonNull(listener);
+    }
+
+    /** 로딩 초과로 빠진 연결을 경기 종료 알림 전에 방에서도 정리한다. */
+    public void onDropped(LongConsumer listener) {
+        droppedListener = Objects.requireNonNull(listener);
+    }
+
+    /** GAME_OVER를 보낸 뒤 방을 대기 상태로 돌린다. */
     public void onFinished(Consumer<Match> listener) {
         this.finishedListener = Objects.requireNonNull(listener);
     }
@@ -89,13 +105,14 @@ public final class GameService {
         if (participants.stream().map(Participant::team).distinct().count() < 2) {
             throw new IllegalArgumentException("두 팀 이상이어야 경기를 시작할 수 있습니다.");
         }
-        String actualMapId = GameMaps.RANDOM.equals(mapId) ? GameMaps.pick(participants.size(), random) : mapId;
+        String actualMapId =
+                GameMaps.RANDOM.equals(mapId) ? GameMaps.pick(participants.size(), random) : mapId;
         if (!GameMaps.exists(actualMapId)) {
             throw new IllegalArgumentException("지원하지 않는 맵입니다: " + mapId);
         }
         if (participants.size() > GameMaps.maxPlayers(actualMapId)) {
-            throw new IllegalArgumentException("%s 맵에는 %d명까지 들어갑니다.".formatted(actualMapId,
-                    GameMaps.maxPlayers(actualMapId)));
+            throw new IllegalArgumentException(
+                    "%s 맵에는 %d명까지 들어갑니다.".formatted(actualMapId, GameMaps.maxPlayers(actualMapId)));
         }
         GameMap map = MapLoader.load(actualMapId);
         if (participants.size() > map.spawns().size()) {
@@ -111,14 +128,27 @@ public final class GameService {
         List<MatchPlayer> players = new ArrayList<>();
         for (int i = 0; i < participants.size(); i++) {
             Participant p = participants.get(i);
-            Mascot mascot = Mascot.RANDOM.equals(p.character()) ? Mascot.pick(random) : Mascot.of(p.character());
+            Mascot mascot =
+                    Mascot.RANDOM.equals(p.character())
+                            ? Mascot.pick(random)
+                            : Mascot.of(p.character());
             int spawn = spawnNumbers.get(i);
             Cell spawnCell = map.spawns().get(spawn - 1);
-            players.add(new MatchPlayer(p.playerId(), p.connectionId(), p.nickname(), mascot, p.team(), spawn, spawnCell));
+            players.add(
+                    new MatchPlayer(
+                            p.playerId(),
+                            p.connectionId(),
+                            p.nickname(),
+                            mascot,
+                            p.team(),
+                            spawn,
+                            spawnCell));
         }
         Match match = new Match(lastMatchId.incrementAndGet(), map, players);
 
         Set<Long> connections = new HashSet<>(match.connectionIds());
+        Set<Long> disconnected = new HashSet<>();
+        for (long id : connections) if (!sender.isConnected(id)) disconnected.add(id);
         synchronized (match) {
             for (Long connectionId : connections) {
                 if (byConnection.putIfAbsent(connectionId, match) != null) {
@@ -132,7 +162,7 @@ public final class GameService {
             deliver(match, match.start(now));
             // 이미 끊긴 연결은 끊김 정리가 경기 등록보다 먼저 돌아 놓쳤을 수 있다. 로딩 시간 초과까지 기다리지 않고 바로 뺀다
             for (Long connectionId : connections) {
-                if (!sender.isConnected(connectionId)) {
+                if (disconnected.contains(connectionId)) {
                     deliver(match, match.leave(connectionId, "DISCONNECT", false, now));
                 }
             }
@@ -160,13 +190,16 @@ public final class GameService {
     }
 
     /** MOVE. 경기 중이 아니거나 맞지 않으면 조용히 버린다 */
-    public void move(long connectionId, long playerId, double x, double y, Facing facing, boolean moving) {
+    public void move(
+            long connectionId, long playerId, double x, double y, Facing facing, boolean moving) {
         Match match = byConnection.get(connectionId);
         if (match == null) {
             return;
         }
         synchronized (match) {
-            deliver(match, match.move(connectionId, playerId, x, y, facing, moving, clock.getAsLong()));
+            deliver(
+                    match,
+                    match.move(connectionId, playerId, x, y, facing, moving, clock.getAsLong()));
         }
         notifyIfFinished(match);
     }
@@ -189,6 +222,7 @@ public final class GameService {
      * @throws GameException 경기 중이 아니면 WRONG_STATE
      */
     public void exit(long connectionId) {
+        exitListener.accept(connectionId);
         Match match = requireMatch(connectionId);
         synchronized (match) {
             deliver(match, match.leave(connectionId, "EXIT", false, clock.getAsLong()));
@@ -211,13 +245,20 @@ public final class GameService {
     /** 타이머가 수십 ms마다 부른다. 경기 하나가 실패해도 나머지는 계속 돈다 */
     public void tick() {
         for (Match match : matches) {
-            try {
-                synchronized (match) {
-                    deliver(match, match.tick(clock.getAsLong()));
+            synchronized (notificationLock) {
+                try {
+                    List<Long> dropped;
+                    synchronized (match) {
+                        List<Long> before = match.connectionIds();
+                        deliver(match, match.tick(clock.getAsLong()));
+                        List<Long> after = match.connectionIds();
+                        dropped = before.stream().filter(id -> !after.contains(id)).toList();
+                    }
+                    dropped.forEach(droppedListener::accept);
+                    notifyIfFinished(match);
+                } catch (RuntimeException e) {
+                    log.error("경기 #{} 타이머 처리 중 오류", match.matchId(), e);
                 }
-                notifyIfFinished(match);
-            } catch (RuntimeException e) {
-                log.error("경기 #{} 타이머 처리 중 오류", match.matchId(), e);
             }
         }
     }
@@ -238,8 +279,8 @@ public final class GameService {
     /**
      * 경기 lock 안에서 부른다. 푸시를 보내고, 경기에서 빠진 연결과 끝난 경기를 정리한다.
      *
-     * <p>주의: 송신 큐가 넘치면 {@code Connection}이 이 스레드에서 끊김 리스너를 부른다. 그래서 경기 lock → 세션 lock
-     * 순서가 생긴다. 세션·방 lock을 잡은 채 경기 메서드를 부르지 않는다.</p>
+     * <p>주의: 송신 큐가 넘치면 {@code Connection}이 이 스레드에서 끊김 리스너를 부른다. 그래서 경기 lock → 세션 lock 순서가 생긴다. 세션·방
+     * lock을 잡은 채 경기 메서드를 부르지 않는다.
      */
     private void deliver(Match match, List<MatchEvent> events) {
         for (MatchEvent event : events) {
@@ -251,8 +292,12 @@ public final class GameService {
         }
         List<Long> remaining = match.connectionIds();
         boolean finished = match.isFinished();
-        byConnection.entrySet().removeIf(entry ->
-                entry.getValue() == match && (finished || !remaining.contains(entry.getKey())));
+        byConnection
+                .entrySet()
+                .removeIf(
+                        entry ->
+                                entry.getValue() == match
+                                        && (finished || !remaining.contains(entry.getKey())));
         if (finished && matches.remove(match)) {
             log.info("경기 #{} 끝", match.matchId());
             pendingFinished.add(match);
@@ -260,15 +305,17 @@ public final class GameService {
     }
 
     /**
-     * 끝난 경기를 {@link #onFinished} 리스너에 알린다. 경기 lock 밖에서 부른다.
-     * 방 API가 이 안에서 방 lock을 잡으므로, 경기 lock을 잡은 채 부르면 lock 순서가 엇갈릴 수 있다.
+     * 끝난 경기를 {@link #onFinished} 리스너에 알린다. 경기 lock 밖에서 부른다. 방 API가 이 안에서 방 lock을 잡으므로, 경기 lock을 잡은
+     * 채 부르면 lock 순서가 엇갈릴 수 있다.
      */
     private void notifyIfFinished(Match match) {
-        if (pendingFinished.remove(match)) {
-            try {
-                finishedListener.accept(match);
-            } catch (RuntimeException e) {
-                log.error("경기 #{} 종료 처리 중 오류", match.matchId(), e);
+        synchronized (notificationLock) {
+            if (pendingFinished.remove(match)) {
+                try {
+                    finishedListener.accept(match);
+                } catch (RuntimeException e) {
+                    log.error("경기 #{} 종료 처리 중 오류", match.matchId(), e);
+                }
             }
         }
     }

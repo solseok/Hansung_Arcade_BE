@@ -18,6 +18,7 @@ package hansung.arcade.core.net;
  */
 @FunctionalInterface
 public interface MessageHandler {
+    Object RESPONDED = new Object();
 
     /**
      * @return 요청에 id가 있으면 {@code ok:true} 응답의 body (record·Map·JsonNode, null이면 {@code {}}).

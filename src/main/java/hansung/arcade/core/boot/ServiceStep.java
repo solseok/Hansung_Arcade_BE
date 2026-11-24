@@ -1,6 +1,9 @@
 package hansung.arcade.core.boot;
 
 import hansung.arcade.core.net.ConnectionListener;
+import hansung.arcade.domain.room.business.RoomService;
+import hansung.arcade.domain.room.web.controller.RoomConnections;
+import hansung.arcade.domain.room.web.controller.RoomListener;
 import hansung.arcade.core.server.ServerContext;
 import hansung.arcade.domain.game.business.GameService;
 import hansung.arcade.domain.game.web.controller.GameConnections;
@@ -59,6 +62,14 @@ public final class ServiceStep implements BootStep {
             }
         }, TICK_MS, TICK_MS, TimeUnit.MILLISECONDS);
 
+        RoomConnections roomConnections = new RoomConnections();
+        RoomService roomService = new RoomService(roomConnections, gameService, () -> System.nanoTime() / 1_000_000);
+        gameService.onFinished(match -> roomService.finishGame(match.matchId()));
+        gameService.onExit(roomService::exitGame);
+        gameService.onDropped(roomService::exitGame);
+        context.register(RoomConnections.class, roomConnections);
+        context.register(RoomService.class, roomService);
+        context.register(RoomListener.class, new RoomListener(roomService, gameTimer));
         context.register(GameService.class, gameService);
         context.register(GameConnections.class, gameConnections);
         context.register(GameListener.class, new GameListener(gameService, gameTimer));

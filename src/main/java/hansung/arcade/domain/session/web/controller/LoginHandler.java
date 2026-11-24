@@ -1,6 +1,7 @@
 package hansung.arcade.domain.session.web.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
+
 import hansung.arcade.core.net.Connection;
 import hansung.arcade.core.net.ErrorCode;
 import hansung.arcade.core.net.Message;
@@ -35,21 +36,25 @@ public final class LoginHandler implements MessageHandler {
     @Override
     public Object handle(Connection connection, Message request) throws ProtocolException {
         Session session = Sessions.of(connection);
-        try {
-            // 로그인한 연결이 무엇을 보내든 ALREADY_LOGGED_IN이 먼저다. 그래서 body 모양보다 먼저 본다
-            sessionService.requireBeforeLogin(session);
-            requireStringArray(request.body().get("nicknames"));
-            LoginRequest body = request.bodyAs(LoginRequest.class);
-            return LoginResponse.from(sessionService.login(session, body.nicknames()));
-        } catch (GameException e) {
-            throw new ProtocolException(e.code(), e.getMessage());
+        synchronized (session) {
+            try {
+                // 로그인한 연결이 무엇을 보내든 ALREADY_LOGGED_IN이 먼저다. 그래서 body 모양보다 먼저 본다
+                sessionService.requireBeforeLogin(session);
+                requireStringArray(request.body().get("nicknames"));
+                LoginRequest body = request.bodyAs(LoginRequest.class);
+                LoginResponse response =
+                        LoginResponse.from(sessionService.login(session, body.nicknames()));
+                if (request.expectsResponse() && !connection.isClosed()) {
+                    connection.send(Message.ok(request, response));
+                }
+                return MessageHandler.RESPONDED;
+            } catch (GameException e) {
+                throw new ProtocolException(e.code(), e.getMessage());
+            }
         }
     }
 
-    /**
-     * Jackson은 숫자·true를 문자열로 바꿔 주므로("true"라는 닉네임이 된다) 바인딩 전에 모양을 직접 본다.
-     * 빠진 경우는 서비스가 개수 오류로 알린다.
-     */
+    /** Jackson은 숫자·true를 문자열로 바꿔 주므로("true"라는 닉네임이 된다) 바인딩 전에 모양을 직접 본다. 빠진 경우는 서비스가 개수 오류로 알린다. */
     private static void requireStringArray(JsonNode nicknames) throws ProtocolException {
         if (nicknames == null || nicknames.isNull()) {
             return;

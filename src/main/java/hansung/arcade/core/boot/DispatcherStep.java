@@ -1,6 +1,8 @@
 package hansung.arcade.core.boot;
 
 import hansung.arcade.core.net.MessageDispatcher;
+import hansung.arcade.domain.room.business.RoomService;
+import hansung.arcade.domain.room.web.controller.RoomHandlers;
 import hansung.arcade.core.server.ServerContext;
 import hansung.arcade.domain.game.business.GameService;
 import hansung.arcade.domain.game.web.controller.GameHandlers;
@@ -23,6 +25,7 @@ public final class DispatcherStep implements BootStep {
         MessageDispatcher dispatcher = new MessageDispatcher();
         dispatcher.register(LoginHandler.TYPE, new LoginHandler(context.get(SessionService.class)));
         new GameHandlers(context.get(GameService.class)).registerTo(dispatcher);
+        new RoomHandlers(context.get(RoomService.class), context.get(SessionService.class)).registerTo(dispatcher);
         context.register(MessageDispatcher.class, dispatcher);
     }
 }
