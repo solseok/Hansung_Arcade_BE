@@ -215,6 +215,27 @@ class MatchItemTest {
     }
 
     @Test
+    void 구출된_뒤_빠져나오는_중에도_아이템을_주울_수_있다() {
+        Match match = playing(NO_RANDOM);
+        long now = dropFluidAtCorner(match);
+        match.move(CONN_RED, RED_1, cx(0), cy(2), Facing.UP, false, now);
+        match.placeBalloon(CONN_RED, RED_1, 0, 2, now);
+        long trappedAt = now + Match.FUSE_MS;
+        match.tick(trappedAt);
+        // 물줄기가 사라진 뒤 3P가 닿아 구한다. 1P는 ESCAPE_MS 동안 빠져나오는 중이다
+        long rescuedAt = trappedAt + Match.FLAME_MS;
+        match.tick(rescuedAt);
+        match.move(CONN_RED, RED_3, cx(0) + 10, cy(2), Facing.LEFT, true, rescuedAt);
+        assertTrue(match.player(RED_1).isEscaping(rescuedAt));
+
+        match.move(CONN_RED, RED_1, cx(0), cy(0), Facing.UP, true, rescuedAt + 100);
+        List<MatchEvent> events = match.pickUpItem(CONN_RED, RED_1, 1, rescuedAt + 100);
+
+        assertTrue(match.player(RED_1).isEscaping(rescuedAt + 100));
+        assertEquals(RED_1, body(events, MatchMessages.ITEM_TAKEN, ItemTaken.class).playerId());
+    }
+
+    @Test
     void 두_사람이_같은_아이템을_보내면_먼저_온_쪽만_먹는다() {
         Match match = playing(NO_RANDOM);
         long now = dropFluidAtCorner(match);

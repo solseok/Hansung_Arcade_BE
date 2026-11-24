@@ -222,8 +222,8 @@ public final class Match {
 
     /**
      * ITEM_PICKUP. 인정되면 방 전체에 ITEM_TAKEN을 보낸다. 인정되지 않으면 조용히 버린다.
-     * 아이템이 아직 있음, 마지막 MOVE 칸이 그 아이템 칸, 살아 있고 갇히지도 빠져나오는 중도 아님
-     * (클라이언트 GameWorld.pickUpItems가 PlayerState.NORMAL에서만 먹는 것과 같다).
+     * 아이템이 아직 있음, 마지막 MOVE 칸이 그 아이템 칸, 살아 있고 갇히지 않음 (Notion 명세).
+     * 구출된 뒤 빠져나오는 중이어도 받는다. 클라이언트는 칸에 들어설 때 한 번만 보내므로, 여기서 버리면 아이템이 맵에 남는다.
      * lock 안에서 처리하므로 두 사람이 같은 아이템을 보내면 먼저 온 쪽만 먹고, 늦은 쪽은 아이템이 없어 버려진다.
      *
      * <p>칸은 마지막 MOVE로만 본다 (물풍선 놓기와 달리 이웃 칸 여유가 없다). 그래서 클라이언트는 아이템 칸에 들어선 위치를
@@ -236,7 +236,8 @@ public final class Match {
         }
         MatchPlayer taker = ownPlayer(connectionId, playerId);
         FieldItem item = items.get(itemId);
-        if (taker == null || item == null || !taker.isFree(now) || !taker.cell().equals(item.cell())) {
+        if (taker == null || item == null || taker.state() != MatchPlayer.State.ALIVE
+                || !taker.cell().equals(item.cell())) {
             return List.of();
         }
         items.remove(itemId);
@@ -580,7 +581,11 @@ public final class Match {
                 .map(item -> placeItem(cell, item));
     }
 
+    /** @throws IllegalArgumentException 액티브 아이템. 맵에는 패시브만 놓는다 (줍는 쪽 {@link MatchPlayer#takeItem}이 패시브만 받는다) */
     private DroppedItem placeItem(Cell cell, ItemType type) {
+        if (type.isActive()) {
+            throw new IllegalArgumentException("액티브 아이템은 아직 맵에 놓지 않습니다: " + type);
+        }
         FieldItem item = new FieldItem(++lastItemId, type, cell);
         items.put(item.itemId(), item);
         return new DroppedItem(item.itemId(), cell.col(), cell.row(), type.id());
