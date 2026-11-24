@@ -12,6 +12,7 @@ import hansung.arcade.domain.game.model.MatchMessages.GameStarted;
 import hansung.arcade.domain.game.model.MatchMessages.ItemDropped;
 import hansung.arcade.domain.game.model.MatchMessages.ItemScattered;
 import hansung.arcade.domain.game.model.MatchMessages.ItemTaken;
+import hansung.arcade.domain.game.model.MatchMessages.ItemUsed;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerLeft;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerMoved;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerPopped;
@@ -84,6 +85,12 @@ public final class Match {
     static final long MIN_TRAPPED_MS = 20;
     /** 두 캐릭터 중심이 가로·세로 모두 이보다 가까우면 닿은 것 (클라이언트 Player.TOUCH_DISTANCE) */
     static final double TOUCH_DISTANCE = GameMap.TILE_SIZE / 2.0;
+    /** 보호막이 물줄기를 막아 주는 시간 (클라이언트 PlayerGear.SHIELD_SECONDS) */
+    public static final long SHIELD_MS = 3_000;
+    /** 스프링 신발로 뛰어 내려앉기까지 (클라이언트 PlayerGear.JUMP_SECONDS) */
+    public static final long JUMP_MS = 400;
+    /** 스프링 신발로 뛰는 거리(칸). 바로 앞 칸을 넘어 그 너머 칸에 내려앉는다 (클라이언트 ItemActions.JUMP_TILES) */
+    static final int JUMP_TILES = 2;
 
     private final long matchId;
     private final GameMap map;
@@ -93,7 +100,7 @@ public final class Match {
     private final Set<Long> loaded = new LinkedHashSet<>();
     private final List<Balloon> balloons = new ArrayList<>();
     private final List<Flame> flames = new ArrayList<>();
-    /** 맵 바닥에 놓인 아이템. 한 칸에 하나뿐이고 패시브만 놓는다(액티브는 아직 다루지 않는다). itemId 순서 */
+    /** 맵 바닥에 놓인 아이템. 한 칸에 하나뿐이다. itemId 순서 */
     private final Map<Integer, FieldItem> items = new LinkedHashMap<>();
     /** 밀려서 미끄러지는 중인 상자: 도착 칸 → 다 미끄러지는 시각 */
     private final Map<Cell, Long> slidingUntil = new HashMap<>();
@@ -189,6 +196,7 @@ public final class Match {
     /**
      * MOVE. 맞지 않으면 조용히 버린다 (초당 20번이라 ERROR를 보내지 않는다).
      * 위치를 저장하고 다른 연결에 중계한 뒤, 그 위치로 물줄기·구출·터뜨리기를 판정한다.
+     * 스프링 신발로 공중에 있는 동안은 서버가 위치를 정하므로 버린다.
      */
     public synchronized List<MatchEvent> move(long connectionId, long playerId, double x, double y, Facing facing,
                                               boolean moving, long now) {
@@ -198,12 +206,14 @@ public final class Match {
             return List.of();
         }
         MatchPlayer mover = ownPlayer(connectionId, playerId);
-        if (mover == null || !mover.isInPlay()) {
+        if (mover == null || !mover.isInPlay() || mover.isAirborne(now)) {
             return List.of();
         }
+        List<MatchEvent> events = new ArrayList<>();
+        // 타이머보다 먼저 왔으면 내려앉기·보호막 끝을 먼저 처리한다. 내려앉은 칸의 아이템은 옮기기 전에 줍는다
+        endItemEffectsIfDue(mover, now, events);
         mover.moveTo(x, y, facing, moving);
 
-        List<MatchEvent> events = new ArrayList<>();
         events.add(new MatchEvent(othersThan(connectionId), MatchMessages.PLAYER_MOVED,
                 new PlayerMoved(playerId, x, y, facing.name(), moving)));
         trapIfWet(mover, now, events);
@@ -223,19 +233,24 @@ public final class Match {
             return List.of();
         }
         MatchPlayer owner = ownPlayer(connectionId, playerId);
+        if (owner == null) {
+            return List.of();
+        }
+        List<MatchEvent> events = new ArrayList<>();
+        // 타이머보다 먼저 왔으면 내려앉기·보호막 끝을 먼저 처리한다 (물줄기 위에 내려앉았으면 갇혀 놓지 못한다)
+        endItemEffectsIfDue(owner, now, events);
         Cell cell = new Cell(col, row);
-        if (owner == null || !owner.isFree(now)
+        if (!owner.isFree(now)
                 || owner.cell().distanceTo(cell) > 1
                 || map.isSolid(col, row) || balloonAt(cell) != null
                 || owner.placedBalloons() >= owner.balloonCapacity()) {
-            return List.of();
+            return events;
         }
         boolean wet = flameAt(cell, now) != null;
         long fuseMs = wet ? 0 : FUSE_MS;
         Balloon balloon = new Balloon(++lastBalloonId, owner.playerId(), cell, owner.waterRange(), now + fuseMs);
         balloons.add(balloon);
         owner.balloonPlaced();
-        List<MatchEvent> events = new ArrayList<>();
         events.add(toAll(MatchMessages.BALLOON_PLACED, new BalloonPlaced(balloon.balloonId(), owner.playerId(),
                 col, row, balloon.range(), fuseMs)));
         if (wet) {
@@ -248,7 +263,7 @@ public final class Match {
 
     /**
      * ITEM_PICKUP. 인정되면 방 전체에 ITEM_TAKEN을 보낸다. 인정되지 않으면 조용히 버린다.
-     * 아이템이 아직 있음, 마지막 MOVE 칸이 그 아이템 칸, 살아 있고 갇히지 않음 (Notion 명세).
+     * 아이템이 아직 있음, 마지막 MOVE 칸이 그 아이템 칸, 살아 있고 갇히지 않음 (Notion 명세), 스프링 신발로 공중에 있지 않음.
      * 구출된 뒤 빠져나오는 중이어도 받는다. 클라이언트는 칸에 들어설 때 한 번만 보내므로, 여기서 버리면 아이템이 맵에 남는다.
      * lock 안에서 처리하므로 두 사람이 같은 아이템을 보내면 먼저 온 쪽만 먹고, 늦은 쪽은 아이템이 없어 버려진다.
      *
@@ -261,21 +276,137 @@ public final class Match {
             return List.of();
         }
         MatchPlayer taker = ownPlayer(connectionId, playerId);
-        FieldItem item = items.get(itemId);
-        if (taker == null || item == null || taker.state() != MatchPlayer.State.ALIVE
-                || !taker.cell().equals(item.cell())) {
+        if (taker == null) {
             return List.of();
         }
-        return List.of(take(taker, item));
+        List<MatchEvent> events = new ArrayList<>();
+        // 타이머보다 먼저 왔으면 내려앉기·보호막 끝을 먼저 처리한다 (내려앉은 칸의 아이템은 거기서 줍는다)
+        endItemEffectsIfDue(taker, now, events);
+        FieldItem item = items.get(itemId);
+        if (item == null || taker.state() != MatchPlayer.State.ALIVE || taker.isAirborne(now)
+                || !taker.cell().equals(item.cell())) {
+            return events;
+        }
+        events.add(take(taker, item));
+        return events;
     }
 
-    /** 아이템을 맵에서 치우고 먹인 뒤, 방 전체에 보낼 ITEM_TAKEN을 만든다 */
+    /** 아이템을 맵에서 치우고 먹인 뒤(액티브는 손에 든다), 방 전체에 보낼 ITEM_TAKEN을 만든다 */
     private MatchEvent take(MatchPlayer taker, FieldItem item) {
         items.remove(item.itemId());
         taker.takeItem(item.type());
         Stats stats = new Stats(taker.balloonCapacity(), taker.waterRange(), taker.speedLevel());
+        String held = taker.heldItem() == null ? null : taker.heldItem().id();
         return toAll(MatchMessages.ITEM_TAKEN,
-                new ItemTaken(item.itemId(), taker.playerId(), item.type().id(), stats, null));
+                new ItemTaken(item.itemId(), taker.playerId(), item.type().id(), stats, held, taker.heldCount()));
+    }
+
+    /** 살아 있는 사람이 선 칸에 아이템이 있으면 줍는다. 갇혔다가 풀리거나 내려앉아 칸에 "들어가지" 않고 서게 됐을 때 부른다 */
+    private void pickUpUnderfoot(MatchPlayer player, List<MatchEvent> events) {
+        FieldItem underfoot = itemAt(player.cell());
+        if (player.state() == MatchPlayer.State.ALIVE && underfoot != null) {
+            events.add(take(player, underfoot));
+        }
+    }
+
+    /**
+     * ITEM_USE. 손에 든 액티브 아이템을 쓴다. 쓰면 효과를 적용하고 방 전체에 ITEM_USED를 보낸다.
+     * 손에 든 것과 다르거나 지금 쓸 수 없으면 조용히 버린다 (Notion 명세: 에러 코드 없음). 아이템은 그대로 남는다.
+     * 조건과 효과는 클라이언트 {@code ItemActions.useItem}과 같다.
+     *
+     * <ul>
+     *   <li>바늘: 갇혀 있을 때만. 구출처럼 {@link #ESCAPE_MS} 동안 빠져나오고, save는 아무도 얻지 않는다.
+     *       갇힌 채 아이템 칸에 서 있었으면 ITEM_USED 바로 뒤에 그 아이템을 줍는다.</li>
+     *   <li>보호막: 땅에 선 보통 상태이고 이미 쓰는 중이 아닐 때. {@link #SHIELD_MS} 동안 물줄기에 갇히지 않는다.</li>
+     *   <li>스프링 신발: 땅에 선 보통 상태일 때. 마지막 MOVE의 칸과 방향에서 {@link #JUMP_TILES}칸 앞 칸에 내려앉는다.
+     *       바로 앞 칸은 무엇이든 넘고, 내려앉을 칸이 맵 밖·막힌 칸이거나 물풍선이 있으면 쓰지 않는다.
+     *       {@link #JUMP_MS} 동안 공중에 있다 (물줄기에 맞지 않고, MOVE·물풍선·줍기를 받지 않는다).</li>
+     * </ul>
+     *
+     * <p>스프링 신발의 방향은 서버가 따로 셈하지 않는다 (클라이언트는 빠져나오기가 끝나면 아래를 보게 바꾼다).
+     * 그래서 클라이언트는 방향을 바꾼 뒤 ITEM_USE 전에 MOVE를 먼저 보내야 한다. 같은 연결의 메시지는 차례대로 처리된다.</p>
+     *
+     * @param item 쓰려는 아이템. 모르는 id라 null이어도 조용히 버린다
+     */
+    public synchronized List<MatchEvent> useItem(long connectionId, long playerId, ItemType item, long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING) {
+            return List.of();
+        }
+        MatchPlayer user = ownPlayer(connectionId, playerId);
+        if (user == null || item == null || !user.isInPlay()) {
+            return List.of();
+        }
+        List<MatchEvent> events = new ArrayList<>();
+        endItemEffectsIfDue(user, now, events);
+        if (user.heldItem() != item || !applyItem(user, item, now)) {
+            return events;
+        }
+        user.useHeldItem();
+        Long durationMs = switch (item) {
+            case SHIELD -> SHIELD_MS;
+            case SPRING_SHOE -> JUMP_MS;
+            default -> null;
+        };
+        Cell landing = item == ItemType.SPRING_SHOE ? user.cell() : null;
+        events.add(toAll(MatchMessages.ITEM_USED, new ItemUsed(user.playerId(), item.id(), durationMs,
+                landing == null ? null : landing.col(), landing == null ? null : landing.row(), user.heldCount())));
+        if (item == ItemType.NEEDLE) {
+            // 클라이언트는 갇힌 동안 보낸 ITEM_PICKUP이 버려졌어도 그 칸에서 다시 보내지 않는다 (구출과 같다)
+            pickUpUnderfoot(user, events);
+        }
+        return events;
+    }
+
+    /** @return 지금 쓸 수 있어 효과를 적용했는지 */
+    private boolean applyItem(MatchPlayer user, ItemType item, long now) {
+        switch (item) {
+            case NEEDLE -> {
+                if (user.state() != MatchPlayer.State.TRAPPED || user.trappedUntil() <= now) {
+                    return false;
+                }
+                user.rescue(now + ESCAPE_MS);
+                return true;
+            }
+            case SHIELD -> {
+                if (!user.isFree(now) || user.isShielded(now)) {
+                    return false;
+                }
+                user.raiseShield(now + SHIELD_MS);
+                return true;
+            }
+            case SPRING_SHOE -> {
+                Cell landing = new Cell(user.cell().col() + user.facing().dx() * JUMP_TILES,
+                        user.cell().row() + user.facing().dy() * JUMP_TILES);
+                if (!user.isFree(now) || map.isSolid(landing.col(), landing.row()) || balloonAt(landing) != null) {
+                    return false;
+                }
+                user.jumpTo(landing, now + JUMP_MS);
+                return true;
+            }
+            default -> {
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 시간이 다 된 아이템 효과를 끝낸다. 타이머가 부르고, 타이머보다 먼저 온 그 사람의 입력(MOVE·BALLOON_PLACE·ITEM_PICKUP·
+     * ITEM_USE)도 처리하기 전에 부른다.
+     * 내려앉으면(클라이언트 PlayerGear.advance) 물줄기가 남은 칸이면 갇히고, 아니면 그 칸의 아이템을 줍는다
+     * (클라이언트는 내려앉은 칸에서 아이템을 바로 먹는다). 보호막이 끝난 순간 물줄기 위에 서 있으면 갇힌다.
+     * 물줄기는 처리하는 지금이 아니라 효과가 끝난 순간의 것으로 본다 (그 사이에 물줄기가 사라졌어도 클라이언트처럼 갇힌다).
+     */
+    private void endItemEffectsIfDue(MatchPlayer player, long now, List<MatchEvent> events) {
+        if (player.isLandingDue(now)) {
+            player.land();
+            trapIfWetAt(player, player.landsAt(), now, events);
+            pickUpUnderfoot(player, events);
+        }
+        if (player.isShieldDue(now)) {
+            player.lowerShield();
+            trapIfWetAt(player, player.shieldUntil(), now, events);
+        }
     }
 
     /**
@@ -407,7 +538,10 @@ public final class Match {
         beginRoundIfAllLoaded(now, events);
     }
 
-    /** 타이머가 자주(수십 ms마다) 부른다. 로딩 시간 초과, 카운트다운 끝, 물풍선 폭발, 갇힘 시간 초과, 제한 시간을 처리한다 */
+    /**
+     * 타이머가 자주(수십 ms마다) 부른다. 로딩 시간 초과, 카운트다운 끝, 물풍선 폭발, 아이템 효과 끝(내려앉기·보호막),
+     * 갇힘 시간 초과, 제한 시간을 처리한다
+     */
     public synchronized List<MatchEvent> tick(long now) {
         List<MatchEvent> events = new ArrayList<>();
         switch (phase) {
@@ -419,6 +553,10 @@ public final class Match {
             case COUNTDOWN -> startPlayIfDue(now);
             case PLAYING -> {
                 explodeDueBalloons(now, events);
+                // 클라이언트 한 틱과 같은 차례: 내려앉은 자리를 이번 폭발이 덮으면 아이템이 먼저 사라지고 갇힌다
+                for (MatchPlayer player : players.values()) {
+                    endItemEffectsIfDue(player, now, events);
+                }
                 flames.removeIf(flame -> flame.until() <= now);
                 settleTouches(now, events);
                 for (MatchPlayer player : players.values()) {
@@ -550,12 +688,17 @@ public final class Match {
         }
     }
 
-    /** 살아 있고 빠져나오는 중이 아닌 사람이 물줄기 칸에 있으면 가둔다 */
+    /** 땅에 선 보통 상태이고 보호막을 쓰는 중이 아닌 사람이 물줄기 칸에 있으면 가둔다 */
     private void trapIfWet(MatchPlayer player, long now, List<MatchEvent> events) {
-        if (!player.isFree(now)) {
+        trapIfWetAt(player, now, now, events);
+    }
+
+    /** {@link #trapIfWet}을 at 시각의 상태·물줄기로 판정하고, 갇히면 now부터 갇힌다 */
+    private void trapIfWetAt(MatchPlayer player, long at, long now, List<MatchEvent> events) {
+        if (!player.isFree(at) || player.isShielded(at)) {
             return;
         }
-        Flame flame = flameAt(player.cell(), now);
+        Flame flame = flameAt(player.cell(), at);
         if (flame == null) {
             return;
         }
@@ -592,10 +735,7 @@ public final class Match {
                 events.add(toAll(MatchMessages.PLAYER_RESCUED, new PlayerRescued(trapped.playerId(), saver.playerId())));
                 // 갇힌 채 아이템 칸에 들어가 서 있었다면 지금 줍는다. 갇힌 동안은 ITEM_PICKUP을 버리고,
                 // 클라이언트는 칸에 들어설 때 한 번만 보내므로 구출된 자리에서는 다시 보내지 않는다
-                FieldItem underfoot = itemAt(trapped.cell());
-                if (underfoot != null) {
-                    events.add(take(trapped, underfoot));
-                }
+                pickUpUnderfoot(trapped, events);
             }
         }
     }
@@ -614,7 +754,7 @@ public final class Match {
 
     /**
      * 터뜨린다. PLAYER_POPPED 바로 뒤에 먹은 아이템을 흩뿌리고, 하나라도 놓였으면 ITEM_SCATTERED를 보낸다
-     * (놓을 칸이 하나도 없으면 보내지 않는다).
+     * (놓을 칸이 하나도 없으면 보내지 않는다). 손에 든 액티브 아이템은 흩뿌리지 않고 사라진다.
      *
      * @param killer 닿아서 터뜨린 사람. 시간이 지나 터졌으면 null
      */
@@ -689,20 +829,15 @@ public final class Match {
     /**
      * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 비율표로 정한다.
      * 나올 확률은 경기 인원에 맞춘다 ({@link ItemDrops#dropChanceFor}). 고정 드롭에는 난수를 쓰지 않는다.
-     * 서버는 아직 액티브 아이템(바늘·보호막·스프링 신발)을 다루지 않으므로, 정해진 것이 액티브면 아무것도 놓지 않는다.
+     * 액티브 아이템(바늘·보호막·스프링 신발)도 패시브와 똑같이 놓는다.
      */
     private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
         return map.takeFixedDrop(cell.col(), cell.row())
                 .or(() -> ItemDrops.roll(random, playerCount))
-                .filter(item -> !item.isActive())
                 .map(item -> placeItem(cell, item));
     }
 
-    /** @throws IllegalArgumentException 액티브 아이템. 맵에는 패시브만 놓는다 (줍는 쪽 {@link MatchPlayer#takeItem}이 패시브만 받는다) */
     private DroppedItem placeItem(Cell cell, ItemType type) {
-        if (type.isActive()) {
-            throw new IllegalArgumentException("액티브 아이템은 아직 맵에 놓지 않습니다: " + type);
-        }
         FieldItem item = new FieldItem(++lastItemId, type, cell);
         items.put(item.itemId(), item);
         return new DroppedItem(item.itemId(), cell.col(), cell.row(), type.id());

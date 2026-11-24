@@ -4,6 +4,7 @@ import hansung.arcade.domain.game.model.Cell;
 import hansung.arcade.domain.game.model.Facing;
 import hansung.arcade.domain.game.model.GameMap;
 import hansung.arcade.domain.game.model.GameMaps;
+import hansung.arcade.domain.game.model.ItemType;
 import hansung.arcade.domain.game.model.MapLoader;
 import hansung.arcade.domain.game.model.Mascot;
 import hansung.arcade.domain.game.model.Match;
@@ -229,6 +230,18 @@ public final class GameService {
         }
         synchronized (match) {
             deliver(match, match.pushBox(connectionId, playerId, col, row, direction, clock.getAsLong()));
+        }
+        notifyIfFinished(match);
+    }
+
+    /** ITEM_USE. 경기 중이 아니거나 쓸 수 없으면 조용히 버린다 */
+    public void useItem(long connectionId, long playerId, ItemType item) {
+        Match match = byConnection.get(connectionId);
+        if (match == null) {
+            return;
+        }
+        synchronized (match) {
+            deliver(match, match.useItem(connectionId, playerId, item, clock.getAsLong()));
         }
         notifyIfFinished(match);
     }

@@ -52,6 +52,16 @@ public enum ItemType {
         };
     }
 
+    /** 메시지의 아이템 id(bubble, needle …)에 해당하는 아이템. 없으면 null */
+    public static ItemType fromId(String id) {
+        for (ItemType item : values()) {
+            if (item.id.equals(id)) {
+                return item;
+            }
+        }
+        return null;
+    }
+
     /** 맵 파일 [item] 층 글자에 해당하는 아이템. 없으면 null */
     public static ItemType fromSymbol(char symbol) {
         for (ItemType item : values()) {

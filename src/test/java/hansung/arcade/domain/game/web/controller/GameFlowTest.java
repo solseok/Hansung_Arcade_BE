@@ -283,6 +283,7 @@ class GameFlowTest {
             assertEquals(1, body.get("stats").get("waterRange").asInt());
             assertEquals(4, body.get("stats").get("speedLevel").asInt());
             assertTrue(body.get("heldItem").isNull());
+            assertEquals(0, body.get("heldCount").asInt());
             assertEquals("ITEM_TAKEN", blue.receive("ITEM_TAKEN").get("type").asText());
             // 늦게 온 두 번째 줍기도 조용히 버렸다. 같은 연결의 메시지는 차례대로 처리되므로,
             // 그 뒤에 보낸 물풍선의 BALLOON_PLACED가 두 번째 ITEM_TAKEN 없이 바로 온다
@@ -321,6 +322,83 @@ class GameFlowTest {
                 assertEquals("shoe", body.get("items").get(0).get("item").asText());
                 assertEquals(2, body.get("items").get(0).get("itemId").asInt());
                 assertEquals("GAME_OVER", client.receive().get("type").asText());
+            }
+        }
+    }
+
+    /** 빨강이 (col, row)에 서서 그 칸에 물풍선을 놓고 (1,0)으로 비켜선 뒤 터뜨린다. 물줄기가 사라질 때까지 시계를 돌린다 */
+    private JsonNode explodeFrom(Client red, Client blue, int col, int row) throws IOException {
+        red.send("MOVE", moveTo(1, col, row));
+        red.send("BALLOON_PLACE", Json.object().put("playerId", 1).put("col", col).put("row", row));
+        red.send("MOVE", moveTo(1, 1, 0));
+        blue.receive("BALLOON_PLACED");
+        // 비켜선 MOVE까지 서버가 처리했다
+        blue.receive("PLAYER_MOVED");
+
+        clock.addAndGet(Match.FUSE_MS);
+        gameService.tick();
+        JsonNode exploded = red.receive("BALLOON_EXPLODED").get("body");
+        blue.receive("BALLOON_EXPLODED");
+        clock.addAndGet(Match.FLAME_MS);
+        gameService.tick();
+        return exploded;
+    }
+
+    @Test
+    void 손에_든_스프링_신발을_ITEM_USE로_쓰면_방_전체가_ITEM_USED를_받고_못_쓰는_요청은_조용히_버린다() throws Exception {
+        try (Client red = new Client(); Client blue = new Client()) {
+            List<Long> ids = connectionIds(2);
+            startMatch(ids.get(0), ids.get(1));
+            beginRound(red, blue);
+            blue.send("MOVE", moveTo(2, 10, 10));
+            red.receive("PLAYER_MOVED");
+
+            // 캠프08 (3,6)·(3,8)은 두 번 맞아야 부서지는 블럭이고 고정 드롭이 스프링 신발이다. 사이 칸 (3,7)에서 두 번 터뜨린다
+            explodeFrom(red, blue, 3, 7);
+            JsonNode exploded = explodeFrom(red, blue, 3, 7);
+            int shoeId = -1;
+            for (JsonNode item : exploded.get("items")) {
+                assertEquals("spring_shoe", item.get("item").asText());
+                if (item.get("col").asInt() == 3 && item.get("row").asInt() == 6) {
+                    shoeId = item.get("itemId").asInt();
+                }
+            }
+            assertEquals(2, exploded.get("items").size());
+
+            red.send("MOVE", moveTo(1, 3, 6));
+            red.send("ITEM_PICKUP", Json.object().put("playerId", 1).put("itemId", shoeId));
+            JsonNode taken = red.receive("ITEM_TAKEN").get("body");
+            assertEquals("spring_shoe", taken.get("heldItem").asText());
+            assertEquals(1, taken.get("heldCount").asInt());
+            blue.receive("ITEM_TAKEN");
+
+            // 들지 않은 아이템, 모르는 아이템, 빠진 필드, 내려앉을 칸이 막힌 방향(왼쪽 (1,6) 블럭)은 ERROR 없이 버린다
+            red.send("ITEM_USE", Json.object().put("playerId", 1).put("item", "needle"));
+            red.send("ITEM_USE", Json.object().put("playerId", 1).put("item", "우산"));
+            red.send("ITEM_USE", Json.object().put("playerId", 1));
+            red.send("ITEM_USE", Json.object().put("playerId", 1).put("item", "spring_shoe"));
+            red.send("MOVE", Json.object().put("playerId", 1).put("x", GameMap.centerX(3)).put("y", GameMap.centerY(6))
+                    .put("facing", "DOWN").put("moving", false));
+            red.send("ITEM_USE", Json.object().put("playerId", 1).put("item", "spring_shoe"));
+
+            JsonNode used = red.receive();
+            assertEquals("ITEM_USED", used.get("type").asText());
+            for (JsonNode body : List.of(used.get("body"), blue.receive("ITEM_USED").get("body"))) {
+                assertEquals(1, body.get("playerId").asLong());
+                assertEquals("spring_shoe", body.get("item").asText());
+                assertEquals(Match.JUMP_MS, body.get("durationMs").asLong());
+                assertEquals(List.of(3, 8), List.of(body.get("col").asInt(), body.get("row").asInt()));
+                assertEquals(0, body.get("heldCount").asInt());
+            }
+
+            // 내려앉은 (3,8)에도 스프링 신발이 있어 서버가 바로 줍게 한다
+            clock.addAndGet(Match.JUMP_MS);
+            gameService.tick();
+            for (Client client : List.of(red, blue)) {
+                JsonNode landed = client.receive("ITEM_TAKEN").get("body");
+                assertEquals(1, landed.get("playerId").asLong());
+                assertEquals("spring_shoe", landed.get("heldItem").asText());
+                assertEquals(1, landed.get("heldCount").asInt());
             }
         }
     }
