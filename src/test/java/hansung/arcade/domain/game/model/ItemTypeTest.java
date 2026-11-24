@@ -24,4 +24,15 @@ class ItemTypeTest {
         }
         assertNull(ItemType.fromSymbol('.'));
     }
+
+    @Test
+    void 메시지의_id로_아이템을_찾고_모르는_id나_null은_아이템이_아니다() {
+        for (ItemType item : ItemType.values()) {
+            assertEquals(item, ItemType.fromId(item.id()));
+        }
+        assertEquals(ItemType.SPRING_SHOE, ItemType.fromId("spring_shoe"));
+        assertNull(ItemType.fromId("SPRING_SHOE"));
+        assertNull(ItemType.fromId("우산"));
+        assertNull(ItemType.fromId(null));
+    }
 }

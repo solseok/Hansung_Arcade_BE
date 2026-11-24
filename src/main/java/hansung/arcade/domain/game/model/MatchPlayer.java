@@ -10,6 +10,9 @@ import java.util.Objects;
  */
 public final class MatchPlayer {
 
+    /** 손에 쌓아 들 수 있는 액티브 아이템 개수 (클라이언트 PlayerGear.MAX_ACTIVE_COUNT) */
+    static final int MAX_HELD_COUNT = 99;
+
     public enum State {
         /** 움직이고 물풍선을 놓을 수 있다 */
         ALIVE,
@@ -55,6 +58,13 @@ public final class MatchPlayer {
     private boolean hasTank;
     /** 이 경기에서 먹은 패시브 아이템, 먹은 순서. 터지면 맵에 흩뿌린다 */
     private final List<ItemType> takenItems = new ArrayList<>();
+    /** 손에 든 액티브 아이템. 없으면 null */
+    private ItemType heldItem;
+    private int heldCount;
+    private boolean shielded;
+    private long shieldUntil;
+    private boolean jumping;
+    private long landsAt;
 
     public MatchPlayer(long playerId, long connectionId, String nickname, Mascot mascot, Team team, int spawn,
                        Cell spawnCell) {
@@ -149,9 +159,32 @@ public final class MatchPlayer {
         return state == State.ALIVE && now < escapingUntil;
     }
 
-    /** 살아 있고 빠져나오는 중도 아님 (클라이언트 PlayerState.NORMAL) */
+    /**
+     * 살아 있고 빠져나오는 중도 아니며, 스프링 신발로 공중에 있지도 않음 (클라이언트 PlayerState.NORMAL이고 점프 중이 아님).
+     * 이때만 물줄기에 갇히고, 물풍선을 놓고, 갇힌 사람에게 닿고, 보호막·스프링 신발을 쓴다.
+     */
     public boolean isFree(long now) {
-        return state == State.ALIVE && !isEscaping(now);
+        return state == State.ALIVE && !isEscaping(now) && !isAirborne(now);
+    }
+
+    /** 손에 든 액티브 아이템 (바늘·보호막·스프링 신발). 없으면 null */
+    public ItemType heldItem() {
+        return heldItem;
+    }
+
+    /** 손에 든 액티브 아이템 개수. 없으면 0 */
+    public int heldCount() {
+        return heldCount;
+    }
+
+    /** 보호막을 쓰는 중인지. 이 동안은 물줄기에 갇히지 않는다 */
+    public boolean isShielded(long now) {
+        return shielded && now < shieldUntil;
+    }
+
+    /** 스프링 신발로 뛰어 공중에 있는지. 공중에서는 움직이거나 물풍선을 놓거나 아이템을 줍지 못하고, 물줄기에도 맞지 않는다 */
+    public boolean isAirborne(long now) {
+        return jumping && now < landsAt;
     }
 
     /**
@@ -229,16 +262,22 @@ public final class MatchPlayer {
         escapingUntil = escapeUntil;
     }
 
-    /** @param goneAt 쓰러지는 연출이 끝나 맵에서 사라지는 시각. 그때까지 몸이 칸을 막는다 */
+    /**
+     * 터진다. 손에 든 액티브 아이템은 흩뿌리지 않고 사라진다.
+     *
+     * @param goneAt 쓰러지는 연출이 끝나 맵에서 사라지는 시각. 그때까지 몸이 칸을 막는다
+     */
     void pop(long goneAt) {
         state = State.POPPED;
         trappedUntil = 0;
         this.goneAt = goneAt;
+        dropHeldItem();
     }
 
     void leave() {
         state = State.LEFT;
         trappedUntil = 0;
+        dropHeldItem();
     }
 
     void balloonPlaced() {
@@ -258,10 +297,10 @@ public final class MatchPlayer {
     }
 
     /**
-     * 패시브 아이템을 먹는다. 효과는 클라이언트 {@code ItemEffects.apply}와 같고, 능력치는 캐릭터 최댓값에서 멈춘다.
-     * 최댓값이라 오르지 않아도 먹은 것으로 센다 (터질 때 흩뿌린다).
+     * 아이템을 먹는다. 효과는 클라이언트 {@code ItemEffects.apply}와 같다.
      *
-     * @throws IllegalArgumentException 액티브 아이템. 서버는 아직 액티브 아이템을 맵에 놓지 않는다
+     * <p>패시브는 능력치를 올리고 캐릭터 최댓값에서 멈춘다. 최댓값이라 오르지 않아도 먹은 것으로 센다 (터질 때 흩뿌린다).
+     * 액티브는 손에 든다 ({@link #hold}). 흩뿌리지 않으므로 먹은 아이템으로 세지 않는다.</p>
      */
     void takeItem(ItemType item) {
         switch (item) {
@@ -277,9 +316,86 @@ public final class MatchPlayer {
             case SHOE -> canPushBalloons = true;
             case GLOVE -> canThrowBalloons = true;
             case TANK -> hasTank = true;
-            case NEEDLE, SHIELD, SPRING_SHOE -> throw new IllegalArgumentException("액티브 아이템은 아직 다루지 않습니다: " + item);
+            case NEEDLE, SHIELD, SPRING_SHOE -> {
+                hold(item);
+                return;
+            }
         }
         takenItems.add(item);
+    }
+
+    /**
+     * 액티브 아이템을 손에 든다 (클라이언트 {@code PlayerGear.equip}). 손은 하나뿐이다.
+     * 같은 아이템이면 개수를 하나 늘리고({@link #MAX_HELD_COUNT}까지), 다르면 들고 있던 것을 버리고 바꿔 든다.
+     */
+    private void hold(ItemType item) {
+        if (item == heldItem) {
+            heldCount = Math.min(MAX_HELD_COUNT, heldCount + 1);
+        } else {
+            heldItem = item;
+            heldCount = 1;
+        }
+    }
+
+    /** 손에 든 액티브 아이템을 하나 쓴다. 다 쓰면 손이 빈다 (클라이언트 {@code PlayerGear.useOne}) */
+    void useHeldItem() {
+        if (heldCount <= 0) {
+            return;
+        }
+        heldCount--;
+        if (heldCount == 0) {
+            heldItem = null;
+        }
+    }
+
+    private void dropHeldItem() {
+        heldItem = null;
+        heldCount = 0;
+    }
+
+    /** 보호막을 until까지 쓴다 */
+    void raiseShield(long until) {
+        shielded = true;
+        shieldUntil = until;
+    }
+
+    /** 보호막 시간이 지났는데 아직 내리지 않았는지. 내리는 순간 물줄기 위에 서 있으면 갇힌다 */
+    boolean isShieldDue(long now) {
+        return shielded && now >= shieldUntil;
+    }
+
+    /** 마지막으로 쓴 보호막이 끝나는 시각 */
+    long shieldUntil() {
+        return shieldUntil;
+    }
+
+    void lowerShield() {
+        shielded = false;
+    }
+
+    /**
+     * 스프링 신발로 landing 칸에 뛴다. 서버는 위치를 바로 내려앉을 칸 가운데로 옮기고, landsAt까지 공중에 둔다.
+     * 공중에 있는 동안에도 그 칸에 서 있는 것으로 본다 (흩뿌리기가 그 칸을 피한다). 그 칸에 물풍선이 놓이는 것은 막지 않는다
+     * (클라이언트도 물풍선 위에 내려앉으면 걸어 나갈 수 있게 한다).
+     */
+    void jumpTo(Cell landing, long landsAt) {
+        moveTo(GameMap.centerX(landing.col()), GameMap.centerY(landing.row()), facing, false);
+        jumping = true;
+        this.landsAt = landsAt;
+    }
+
+    /** 내려앉을 때가 지났는데 아직 내려앉히지 않았는지 */
+    boolean isLandingDue(long now) {
+        return jumping && now >= landsAt;
+    }
+
+    /** 마지막으로 뛴 점프가 내려앉는 시각 */
+    long landsAt() {
+        return landsAt;
+    }
+
+    void land() {
+        jumping = false;
     }
 
     /** 물줄기 길이를 캐릭터 최댓값까지 한 번에 올린다 (클라이언트처럼 최댓값을 더한 뒤 맞춘다) */

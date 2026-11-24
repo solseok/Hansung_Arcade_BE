@@ -354,6 +354,24 @@ class MatchBoxTest {
     }
 
     @Test
+    void 스프링_신발로_내려앉을_칸으로는_밀지_않는다() {
+        // 초록이 (2,4)에서 위로 뛰어 (2,2)에 내려앉는다. 빨강이 (2,1) 상자를 아래 (2,2)로 밀려 한다
+        Match match = playing();
+        match.player(GREEN_4).takeItem(ItemType.SPRING_SHOE);
+        stopAt(match, GREEN_4, 2, 4, Facing.UP, PLAY);
+        assertEquals(List.of(MatchMessages.ITEM_USED),
+                types(match.useItem(CONN_GREEN, GREEN_4, ItemType.SPRING_SHOE, PLAY)));
+        stopAt(match, RED_1, 2, 0, Facing.DOWN, PLAY);
+
+        assertEquals(List.of(), push(match, RED_1, 2, 1, Facing.DOWN, PLAY + Match.JUMP_MS / 2));
+
+        // 내려앉은 뒤 비켜서면 민다
+        match.tick(PLAY + Match.JUMP_MS);
+        stopAt(match, GREEN_4, 4, 2, Facing.RIGHT, PLAY + Match.JUMP_MS);
+        assertMoved(push(match, RED_1, 2, 1, Facing.DOWN, PLAY + Match.JUMP_MS), 2, 1, 2, 2);
+    }
+
+    @Test
     void 나간_사람은_칸을_막지_않는다() {
         Match match = playing();
         stopAt(match, RED_1, 1, 1, Facing.RIGHT, PLAY);

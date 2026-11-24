@@ -103,7 +103,10 @@ class MatchItemTest {
         return body(match.tick(placedAt + Match.FUSE_MS), MatchMessages.BALLOON_EXPLODED, BalloonExploded.class);
     }
 
-    /** (1,0)을 터뜨려 (0,0)에 고정 드롭 물줄기(itemId 1)를 떨어뜨리고, 물줄기가 사라진 시각을 돌려준다 */
+    /**
+     * (1,0)을 터뜨려 (0,0)에 고정 드롭 물줄기(itemId 1)를 떨어뜨리고, 물줄기가 사라진 시각을 돌려준다.
+     * (2,0)에는 고정 드롭 스프링 신발(itemId 2)도 함께 나온다
+     */
     private long dropFluidAtCorner(Match match) {
         explodeAt(match, 1, PLAY);
         long later = PLAY + Match.FUSE_MS + Match.FLAME_MS;
@@ -112,13 +115,14 @@ class MatchItemTest {
     }
 
     @Test
-    void 블럭이_다_부서지면_고정_드롭이_나오고_액티브_고정_드롭은_아무것도_놓지_않는다() {
+    void 블럭이_다_부서지면_패시브든_액티브든_고정_드롭이_나온다() {
         Match match = playing(NO_RANDOM);
 
         BalloonExploded exploded = explodeAt(match, 1, PLAY);
 
         assertEquals(List.of(new ChangedTile(0, 0, "."), new ChangedTile(2, 0, ".")), exploded.tiles());
-        assertEquals(List.of(new DroppedItem(1, 0, 0, "fluid")), exploded.items());
+        assertEquals(List.of(new DroppedItem(1, 0, 0, "fluid"), new DroppedItem(2, 2, 0, "spring_shoe")),
+                exploded.items());
         assertEquals(List.of(), exploded.removedItems());
         // 한 번 떨어뜨린 고정 드롭은 비운다
         assertEquals(Optional.empty(), map.fixedDrop(0, 0));
@@ -188,14 +192,14 @@ class MatchItemTest {
     }
 
     @Test
-    void 비율표에서_액티브가_나오면_아무것도_놓지_않는다() {
+    void 비율표에서_액티브가_나오면_그대로_놓는다() {
         // 나옴(0.0), 마지막 구간(0.99) = 스프링 신발
         Match match = playing(new ScriptedRandom(0.0, 0.99));
 
         BalloonExploded exploded = explodeAt(match, 5, PLAY);
 
         assertEquals(new ChangedTile(4, 0, "."), exploded.tiles().get(0));
-        assertEquals(List.of(), exploded.items());
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "spring_shoe")), exploded.items());
     }
 
     @Test
@@ -203,10 +207,10 @@ class MatchItemTest {
         Match match = playing(NO_RANDOM);
         long later = dropFluidAtCorner(match);
 
-        // 다시 (1,0)을 터뜨리면 이제 바닥인 (0,0)까지 물줄기가 들어간다
+        // 다시 (1,0)을 터뜨리면 이제 바닥인 (0,0)·(2,0)까지 물줄기가 들어간다
         BalloonExploded exploded = explodeAt(match, 1, later);
 
-        assertEquals(List.of(1), exploded.removedItems());
+        assertEquals(List.of(1, 2), exploded.removedItems());
         assertEquals(List.of(), exploded.items());
         match.move(CONN_RED, RED_1, cx(0), cy(0), Facing.UP, false, later + Match.FUSE_MS + Match.FLAME_MS);
         assertEquals(List.of(), match.pickUpItem(CONN_RED, RED_1, 1, later + Match.FUSE_MS + Match.FLAME_MS));
@@ -222,7 +226,7 @@ class MatchItemTest {
 
         assertEquals(List.of(MatchMessages.ITEM_TAKEN), types(events));
         assertEquals(List.of(CONN_RED, CONN_BLUE), events.get(0).recipients());
-        assertEquals(new ItemTaken(1, RED_1, "fluid", new Stats(1, 2, 4), null), events.get(0).body());
+        assertEquals(new ItemTaken(1, RED_1, "fluid", new Stats(1, 2, 4), null, 0), events.get(0).body());
         // 오른 물줄기 길이는 다음에 놓는 물풍선부터 쓴다
         BalloonPlaced placed = body(match.placeBalloon(CONN_RED, RED_1, 0, 0, now), MatchMessages.BALLOON_PLACED,
                 BalloonPlaced.class);
@@ -277,7 +281,7 @@ class MatchItemTest {
 
         assertEquals(List.of(MatchMessages.PLAYER_MOVED, MatchMessages.PLAYER_RESCUED, MatchMessages.ITEM_TAKEN),
                 types(events));
-        assertEquals(new ItemTaken(1, RED_1, "fluid", new Stats(1, 2, 4), null), events.get(2).body());
+        assertEquals(new ItemTaken(1, RED_1, "fluid", new Stats(1, 2, 4), null, 0), events.get(2).body());
         assertEquals(List.of(CONN_RED, CONN_BLUE), events.get(2).recipients());
         assertEquals(List.of(ItemType.FLUID), match.player(RED_1).takenItems());
         // 맵에서도 치웠다

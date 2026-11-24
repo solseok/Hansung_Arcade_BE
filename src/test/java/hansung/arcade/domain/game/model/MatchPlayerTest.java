@@ -6,7 +6,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MatchPlayerTest {
@@ -81,13 +81,74 @@ class MatchPlayerTest {
     }
 
     @Test
-    void 액티브_아이템은_먹지_않는다() {
+    void 액티브_아이템은_손에_들고_능력치와_흩뿌릴_목록은_그대로다() {
         MatchPlayer player = player("kkukku");
 
-        for (ItemType item : List.of(ItemType.NEEDLE, ItemType.SHIELD, ItemType.SPRING_SHOE)) {
-            assertThrows(IllegalArgumentException.class, () -> player.takeItem(item));
-        }
+        player.takeItem(ItemType.NEEDLE);
+
+        assertEquals(ItemType.NEEDLE, player.heldItem());
+        assertEquals(1, player.heldCount());
+        assertEquals(List.of(1, 1, 4), List.of(player.balloonCapacity(), player.waterRange(), player.speedLevel()));
         assertEquals(List.of(), player.takenItems());
+    }
+
+    @Test
+    void 같은_액티브를_또_먹으면_쌓이고_다른_액티브를_먹으면_바꿔_든다() {
+        MatchPlayer player = player("kkukku");
+
+        player.takeItem(ItemType.SHIELD);
+        player.takeItem(ItemType.SHIELD);
+        assertEquals(List.of(ItemType.SHIELD, 2), List.of(player.heldItem(), player.heldCount()));
+
+        // 패시브는 손을 건드리지 않는다
+        player.takeItem(ItemType.BUBBLE);
+        assertEquals(List.of(ItemType.SHIELD, 2), List.of(player.heldItem(), player.heldCount()));
+
+        player.takeItem(ItemType.SPRING_SHOE);
+        assertEquals(List.of(ItemType.SPRING_SHOE, 1), List.of(player.heldItem(), player.heldCount()));
+    }
+
+    @Test
+    void 쌓아_드는_개수는_클라이언트처럼_99개에서_멈춘다() {
+        MatchPlayer player = player("kkukku");
+
+        for (int i = 0; i < 120; i++) {
+            player.takeItem(ItemType.NEEDLE);
+        }
+
+        assertEquals(MatchPlayer.MAX_HELD_COUNT, player.heldCount());
+        assertEquals(99, MatchPlayer.MAX_HELD_COUNT);
+    }
+
+    @Test
+    void 손에_든_아이템을_쓰면_하나씩_줄고_다_쓰면_손이_빈다() {
+        MatchPlayer player = player("kkukku");
+        player.takeItem(ItemType.NEEDLE);
+        player.takeItem(ItemType.NEEDLE);
+
+        player.useHeldItem();
+        assertEquals(List.of(ItemType.NEEDLE, 1), List.of(player.heldItem(), player.heldCount()));
+
+        player.useHeldItem();
+        assertNull(player.heldItem());
+        assertEquals(0, player.heldCount());
+
+        // 빈손에 써도 음수가 되지 않는다
+        player.useHeldItem();
+        assertEquals(0, player.heldCount());
+    }
+
+    @Test
+    void 터지면_손에_든_아이템은_사라지고_먹은_패시브만_흩뿌릴_목록에_남는다() {
+        MatchPlayer player = player("kkukku");
+        player.takeItem(ItemType.FLUID);
+        player.takeItem(ItemType.SHIELD);
+
+        player.pop(0);
+
+        assertNull(player.heldItem());
+        assertEquals(0, player.heldCount());
+        assertEquals(List.of(ItemType.FLUID), player.handOverTakenItems());
     }
 
     @Test
