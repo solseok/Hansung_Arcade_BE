@@ -22,6 +22,7 @@ public final class MatchMessages {
     public static final String AIRPLANE_APPEARED = "AIRPLANE_APPEARED";
     /** 비행기가 지나가며 칸에 아이템을 떨어뜨렸다 */
     public static final String ITEM_DROPPED = "ITEM_DROPPED";
+    public static final String BOX_MOVED = "BOX_MOVED";
     public static final String PLAYER_LEFT = "PLAYER_LEFT";
     public static final String GAME_OVER = "GAME_OVER";
 
@@ -104,6 +105,10 @@ public final class MatchMessages {
      * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 떨어지는 그림에만 쓴다
      */
     public record ItemDropped(int airplaneId, int itemId, int col, int row, String item, long fallMs) {
+    }
+
+    /** 밀린 상자가 있던 칸(바닥이 된다)과 간 칸 */
+    public record BoxMoved(int fromCol, int fromRow, int toCol, int toRow) {
     }
 
     public record PlayerLeft(List<Long> playerIds, String reason) {
