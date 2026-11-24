@@ -259,6 +259,49 @@ class MatchItemTest {
     }
 
     @Test
+    void 갇힌_채_아이템_칸에_서_있다가_구출되면_PLAYER_RESCUED_바로_뒤에_그_아이템을_줍는다() {
+        Match match = playing(NO_RANDOM);
+        long now = dropFluidAtCorner(match);
+        // 1P는 (0,2)에서 갇힌 채 (0,0) 아이템 칸까지 걸어간다. 그때 보낸 ITEM_PICKUP은 버려진다
+        match.move(CONN_RED, RED_1, cx(0), cy(2), Facing.UP, false, now);
+        match.placeBalloon(CONN_RED, RED_1, 0, 2, now);
+        long trappedAt = now + Match.FUSE_MS;
+        match.tick(trappedAt);
+        long rescuedAt = trappedAt + Match.FLAME_MS;
+        match.tick(rescuedAt);
+        match.move(CONN_RED, RED_1, cx(0), cy(0), Facing.UP, true, rescuedAt);
+        assertEquals(List.of(), match.pickUpItem(CONN_RED, RED_1, 1, rescuedAt));
+
+        // 3P가 닿아 구한다. 클라이언트는 칸에 새로 들어서지 않아 다시 보내지 않으므로 서버가 바로 줍게 한다
+        List<MatchEvent> events = match.move(CONN_RED, RED_3, cx(0) + 10, cy(0), Facing.LEFT, true, rescuedAt + 50);
+
+        assertEquals(List.of(MatchMessages.PLAYER_MOVED, MatchMessages.PLAYER_RESCUED, MatchMessages.ITEM_TAKEN),
+                types(events));
+        assertEquals(new ItemTaken(1, RED_1, "fluid", new Stats(1, 2, 4), null), events.get(2).body());
+        assertEquals(List.of(CONN_RED, CONN_BLUE), events.get(2).recipients());
+        assertEquals(List.of(ItemType.FLUID), match.player(RED_1).takenItems());
+        // 맵에서도 치웠다
+        assertEquals(List.of(), match.pickUpItem(CONN_RED, RED_3, 1, rescuedAt + 50));
+    }
+
+    @Test
+    void 구출된_자리에_아이템이_없으면_ITEM_TAKEN을_보내지_않는다() {
+        Match match = playing(NO_RANDOM);
+        long now = dropFluidAtCorner(match);
+        match.move(CONN_RED, RED_1, cx(0), cy(2), Facing.UP, false, now);
+        match.placeBalloon(CONN_RED, RED_1, 0, 2, now);
+        long trappedAt = now + Match.FUSE_MS;
+        match.tick(trappedAt);
+        long rescuedAt = trappedAt + Match.FLAME_MS;
+        match.tick(rescuedAt);
+
+        List<MatchEvent> events = match.move(CONN_RED, RED_3, cx(0) + 10, cy(2), Facing.LEFT, true, rescuedAt);
+
+        assertEquals(List.of(MatchMessages.PLAYER_MOVED, MatchMessages.PLAYER_RESCUED), types(events));
+        assertEquals(List.of(), match.player(RED_1).takenItems());
+    }
+
+    @Test
     void 구출된_뒤_빠져나오는_중에도_아이템을_주울_수_있다() {
         Match match = playing(NO_RANDOM);
         long now = dropFluidAtCorner(match);
