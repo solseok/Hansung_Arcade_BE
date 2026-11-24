@@ -55,7 +55,7 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * </pre>
  *
  * <p>PLAYING 동안 남은 시간이 {@link AirDrop#APPEARANCES_MS}가 되면 비행기가 나와(AIRPLANE_APPEARED) 맵을 가로지르며
- * 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED).</p>
+ * 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED). 아이템이 칸에 닿는 순간 그 칸에 선 사람이 있으면 바로 먹인다(ITEM_TAKEN).</p>
  *
  * <p>모든 public 메서드는 이 객체로 잠근다. 받는 스레드(MOVE 등)와 타이머 스레드(tick)가 함께 부른다.</p>
  */
@@ -112,6 +112,8 @@ public final class Match {
     private final AirDrop airDrop;
     /** 아직 떨어뜨릴 칸이 남은 비행기들. 나온 순서 */
     private final List<Airplane> airplanes = new ArrayList<>();
+    /** 비행기에서 떨어져 아직 칸에 닿지 않은 아이템. 떨어뜨린 순서 */
+    private final List<FallingDrop> falling = new ArrayList<>();
     /** 다음에 나올 비행기의 {@link AirDrop#APPEARANCES_MS} 차례 */
     private int nextAppearance;
     private int lastAirplaneId;
@@ -537,6 +539,7 @@ public final class Match {
             flames.clear();
             items.clear();
             airplanes.clear();
+            falling.clear();
             return;
         }
         // 한 팀만 남았으면 로딩 중이어도 ROUND_BEGIN 없이 바로 끝낸다
@@ -747,9 +750,13 @@ public final class Match {
     }
 
     private static MatchPlayer nearest(MatchPlayer trapped, List<MatchPlayer> candidates) {
+        return nearestTo(trapped.x(), trapped.y(), candidates);
+    }
+
+    /** candidates 가운데 중심이 (x, y)에 가장 가까운 사람. 거리가 같으면 playerId가 작은 사람. 없으면 null */
+    private static MatchPlayer nearestTo(double x, double y, List<MatchPlayer> candidates) {
         return candidates.stream()
-                .min(Comparator.comparingDouble(
-                                (MatchPlayer other) -> Math.hypot(other.x() - trapped.x(), other.y() - trapped.y()))
+                .min(Comparator.comparingDouble((MatchPlayer other) -> Math.hypot(other.x() - x, other.y() - y))
                         .thenComparingLong(MatchPlayer::playerId))
                 .orElse(null);
     }
@@ -896,11 +903,13 @@ public final class Match {
         flames.clear();
         items.clear();
         airplanes.clear();
+        falling.clear();
         events.add(toAll(MatchMessages.GAME_OVER, new GameOver(reason, standings)));
     }
 
     /**
-     * 남은 시간이 출현 시각이 된 비행기를 띄우고, 날고 있는 비행기가 지나친 칸에 아이템을 떨어뜨린다.
+     * 남은 시간이 출현 시각이 된 비행기를 띄우고, 날고 있는 비행기가 지나친 칸에 아이템을 떨어뜨리고,
+     * 떨어지던 아이템이 칸에 닿으면 그 칸에 선 사람에게 먹인다.
      * PLAYING일 때만 부른다. 경기가 끝나면 새로 나오지도, 떨어뜨리지도 않는다 (클라이언트 {@code AirDrop}과 같다).
      * 출현 시각보다 {@link AirDrop#LATE_SKIP_MS} 이상 늦은 tick이면 그 비행기는 건너뛴다.
      */
@@ -922,6 +931,7 @@ public final class Match {
                 it.remove();
             }
         }
+        landFallingDrops(now, events);
     }
 
     /** 비행기를 띄운다. 떨어뜨릴 칸은 지금 맵으로 고르고({@link AirDrop#plan}), 지나가는 순서로 줄 세운다 */
@@ -940,6 +950,7 @@ public final class Match {
     /**
      * 비행기가 drop 칸의 열을 지나는 순간. 칸이 비어 있으면 아이템을 놓고 ITEM_DROPPED로 알린다.
      * 서버는 이때부터 아이템이 맵에 있다고 본다. 클라이언트는 fallMs 동안 떨어지는 모습을 보여 준 뒤 놓는다.
+     * 칸에 닿는 시각(지금 + fallMs)을 적어 두었다가 {@link #landFallingDrops}가 그 칸에 선 사람에게 먹인다.
      */
     private void release(int airplaneId, AirDrop.Drop drop, long now, List<MatchEvent> events) {
         Cell cell = new Cell(drop.col(), drop.row());
@@ -947,8 +958,10 @@ public final class Match {
             return;
         }
         DroppedItem placed = placeItem(cell, drop.item());
+        long fallMs = AirDrop.fallMs(cell.row());
+        falling.add(new FallingDrop(placed.itemId(), now + fallMs));
         events.add(toAll(MatchMessages.ITEM_DROPPED, new ItemDropped(airplaneId, placed.itemId(), placed.col(),
-                placed.row(), placed.item(), AirDrop.fallMs(cell.row()))));
+                placed.row(), placed.item(), fallMs)));
     }
 
     /**
@@ -958,20 +971,53 @@ public final class Match {
      *   <li>막힌 칸 (블럭·집 등 지나갈 수 없는 칸, 맵 바깥)</li>
      *   <li>물풍선, 이미 놓인 아이템</li>
      *   <li>물줄기가 남은 칸. 클라이언트는 물줄기 칸의 아이템을 바로 지운다</li>
-     *   <li>경기 중인 사람(살아 있거나 갇힌 사람)의 몸이 조금이라도 걸친 칸</li>
      * </ul>
+     * <p>사람은 막지 않는다. 사람이 서 있어도 떨어뜨리고, 아이템이 닿는 순간 그 칸에 선 사람이 바로 먹는다
+     * ({@link #landFallingDrops}).</p>
      */
     private boolean canDropAt(Cell cell, long now) {
-        if (map.isSolid(cell.col(), cell.row()) || balloonAt(cell) != null || itemAt(cell) != null
-                || flameAt(cell, now) != null) {
-            return false;
-        }
-        for (MatchPlayer player : players.values()) {
-            if (player.isInPlay() && player.overlaps(cell)) {
-                return false;
+        return !map.isSolid(cell.col(), cell.row()) && balloonAt(cell) == null && itemAt(cell) == null
+                && flameAt(cell, now) == null;
+    }
+
+    /**
+     * 칸에 닿을 때가 된 아이템을 그 칸에 선 사람에게 바로 먹이고 ITEM_TAKEN을 보낸다. 클라이언트의 ITEM_PICKUP을 기다리지 않는다.
+     * <ul>
+     *   <li>선 사람: 충돌 박스 중심이 그 칸이고 살아 있으며 공중에 있지 않은 사람 (ITEM_PICKUP과 같은 기준).
+     *       갇힌 사람은 구해질 때, 스프링 신발로 뛰는 중인 사람은 내려앉을 때 발밑 아이템으로 먹는다.
+     *       여럿이면 칸 가운데에 가장 가까운 사람, 거리가 같으면 playerId가 작은 사람이다.</li>
+     *   <li>떨어지는 동안 이미 주웠거나 물줄기에 사라진 아이템은 아무 일도 없다.</li>
+     *   <li>닿을 때 아무도 없으면 그대로 맵에 남고, 그 뒤 들어오는 사람이 ITEM_PICKUP으로 줍는다. 클라이언트 화면에서는
+     *       통신 지연만큼 늦게 닿으므로, 그 사이 들어온 사람의 클라이언트는 닿을 때 ITEM_PICKUP을 보낸다.</li>
+     * </ul>
+     * <p>tick 안에서 폭발·갇힘을 처리한 뒤에 본다. tick이 늦어 닿는 시각과 터지는 시각이 한 tick 안에 겹치면
+     * 물줄기를 먼저 본다 (떨어뜨리기와 마찬가지로 tick 시각 기준이다).</p>
+     */
+    private void landFallingDrops(long now, List<MatchEvent> events) {
+        for (Iterator<FallingDrop> it = falling.iterator(); it.hasNext(); ) {
+            FallingDrop drop = it.next();
+            if (drop.landsAt() > now) {
+                continue;
+            }
+            it.remove();
+            FieldItem item = items.get(drop.itemId());
+            if (item == null) {
+                continue;
+            }
+            MatchPlayer taker = standingOn(item.cell(), now);
+            if (taker != null) {
+                events.add(take(taker, item));
             }
         }
-        return true;
+    }
+
+    /** 충돌 박스 중심이 cell에 있고 살아 있으며 공중에 있지 않은 사람 가운데 칸 가운데에 가장 가까운 사람. 없으면 null */
+    private MatchPlayer standingOn(Cell cell, long now) {
+        List<MatchPlayer> standing = players.values().stream()
+                .filter(player -> player.state() == MatchPlayer.State.ALIVE && !player.isAirborne(now)
+                        && player.cell().equals(cell))
+                .toList();
+        return nearestTo(GameMap.centerX(cell.col()), GameMap.centerY(cell.row()), standing);
     }
 
     /** 이 연결의 플레이어. 다른 연결의 playerId면 null */
@@ -1050,5 +1096,9 @@ public final class Match {
 
     /** 비행기가 떨어뜨리려는 칸과, 떨어뜨리는 자리가 그 열을 지나는 시각 */
     private record PassingDrop(AirDrop.Drop drop, long passAt) {
+    }
+
+    /** 비행기에서 떨어지는 중인 아이템과 칸에 닿는 시각 */
+    private record FallingDrop(int itemId, long landsAt) {
     }
 }
