@@ -168,4 +168,31 @@ class AirDropTest {
         }
         return both / (double) rounds;
     }
+
+    @Test
+    void 비행기는_오른쪽부터_번갈아_난다() {
+        assertEquals(Facing.RIGHT, AirDrop.headingOf(0));
+        assertEquals(Facing.LEFT, AirDrop.headingOf(1));
+        assertEquals(Facing.RIGHT, AirDrop.headingOf(2));
+    }
+
+    @Test
+    void 떨어뜨리는_자리가_열_가운데를_지나는_시각은_맵_바깥_80px에서_초당_220px로_계산한다() {
+        GameMap map = emptyMap();
+        // 오른쪽으로: 0열 가운데(20px)까지 100px → 455ms, 14열 가운데(580px)까지 660px → 3000ms
+        assertEquals(455, AirDrop.passMs(map, Facing.RIGHT, 0));
+        assertEquals(3000, AirDrop.passMs(map, Facing.RIGHT, 14));
+        // 왼쪽으로는 맵 오른쪽 바깥(680px)에서 들어온다
+        assertEquals(455, AirDrop.passMs(map, Facing.LEFT, 14));
+        assertEquals(3000, AirDrop.passMs(map, Facing.LEFT, 0));
+    }
+
+    @Test
+    void 떨어지는_시간은_비행기_배에서_칸_가운데까지_가속도_2400으로_계산한다() {
+        // 0줄은 배보다 위라 최소 높이 12px → 100ms, 5줄은 174px → 381ms, 12줄은 454px → 615ms
+        assertEquals(100, AirDrop.fallMs(0));
+        assertEquals(108, AirDrop.fallMs(1));
+        assertEquals(381, AirDrop.fallMs(5));
+        assertEquals(615, AirDrop.fallMs(12));
+    }
 }
