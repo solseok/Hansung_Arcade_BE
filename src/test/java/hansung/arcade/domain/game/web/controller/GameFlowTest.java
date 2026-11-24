@@ -127,6 +127,16 @@ class GameFlowTest {
         return move(playerId, GameMap.centerX(col), GameMap.centerY(row));
     }
 
+    /** (col, row) 칸 가운데에서 facing 쪽을 보고 멈춰 섰다는 MOVE */
+    private static JsonNode stopAt(long playerId, int col, int row, String facing) {
+        return Json.object().put("playerId", playerId).put("x", GameMap.centerX(col)).put("y", GameMap.centerY(row))
+                .put("facing", facing).put("moving", false);
+    }
+
+    private static JsonNode boxPush(long playerId, int col, int row, String direction) {
+        return Json.object().put("playerId", playerId).put("col", col).put("row", row).put("direction", direction);
+    }
+
     /**
      * 캠프08에서 빨강이 (1,0)에 물풍선을 놓고 (1,2)로 비켜서서 터뜨린다. (0,0) 블럭이 부서져 고정 드롭 신발(itemId 1)이 나온다.
      * 파랑은 먼저 멀리 (10,10)으로 비켜 둔다. 물줄기가 사라질 때까지 시계를 돌리고 폭발 결과를 돌려준다.
@@ -312,6 +322,55 @@ class GameFlowTest {
                 assertEquals(2, body.get("items").get(0).get("itemId").asInt());
                 assertEquals("GAME_OVER", client.receive().get("type").asText());
             }
+        }
+    }
+
+    @Test
+    void 상자를_밀면_방_전체가_BOX_MOVED를_받고_상자를_따라간_고정_드롭이_새_칸에서_나오며_틀린_요청은_조용히_버린다()
+            throws Exception {
+        try (Client red = new Client(); Client blue = new Client()) {
+            List<Long> ids = connectionIds(2);
+            startMatch(ids.get(0), ids.get(1));
+            beginRound(red, blue);
+            // 캠프08 (2,1) 상자에는 고정 드롭 울트라가 있다. 빨강이 위쪽 덤불 (2,0)에서 아래를 보고 멈춘다
+            blue.send("MOVE", moveTo(2, 10, 10));
+            red.receive("PLAYER_MOVED");
+            red.send("MOVE", stopAt(1, 2, 0, "DOWN"));
+
+            red.send("BOX_PUSH", Json.object().put("playerId", 1).put("col", 2).put("row", 1));
+            red.send("BOX_PUSH", boxPush(1, 2, 1, "옆"));
+            red.send("BOX_PUSH", boxPush(1, 2, 1, "RIGHT"));
+            red.send("BOX_PUSH", boxPush(1, 2, 1, "DOWN"));
+            // 이미 밀려 간 상자를 한 번 더 미는 늦은 요청
+            red.send("BOX_PUSH", boxPush(1, 2, 1, "DOWN"));
+
+            // 틀리거나 밀 수 없는 요청에는 ERROR가 없으므로 빨강이 다음에 받는 것은 BOX_MOVED다
+            JsonNode moved = red.receive();
+            assertEquals("BOX_MOVED", moved.get("type").asText());
+            for (JsonNode body : List.of(moved.get("body"), blue.receive("BOX_MOVED").get("body"))) {
+                assertEquals(List.of(2, 1, 2, 2), List.of(body.get("fromCol").asInt(), body.get("fromRow").asInt(),
+                        body.get("toCol").asInt(), body.get("toRow").asInt()));
+            }
+
+            // 비워진 (2,1)에 물풍선을 놓고 (1,0)으로 비켜선다. 아래 물줄기가 (2,2)로 간 상자를 부수고 울트라가 나온다
+            red.send("BALLOON_PLACE", Json.object().put("playerId", 1).put("col", 2).put("row", 1));
+            red.send("MOVE", moveTo(1, 1, 0));
+            // 늦은 두 번째 밀기도 조용히 버렸으므로 다음은 BALLOON_PLACED다
+            assertEquals("BALLOON_PLACED", red.receive().get("type").asText());
+            blue.receive("BALLOON_PLACED");
+            blue.receive("PLAYER_MOVED");
+            clock.addAndGet(Match.FUSE_MS);
+            gameService.tick();
+
+            JsonNode exploded = red.receive("BALLOON_EXPLODED").get("body");
+            List<String> tiles = new ArrayList<>();
+            exploded.get("tiles").forEach(tile -> tiles.add(
+                    tile.get("col").asInt() + "," + tile.get("row").asInt() + "=" + tile.get("tile").asText()));
+            assertTrue(tiles.contains("2,2=."), "부서진 칸: " + tiles);
+            List<String> items = new ArrayList<>();
+            exploded.get("items").forEach(item -> items.add(
+                    item.get("col").asInt() + "," + item.get("row").asInt() + "=" + item.get("item").asText()));
+            assertTrue(items.contains("2,2=ultra"), "나온 아이템: " + items);
         }
     }
 
