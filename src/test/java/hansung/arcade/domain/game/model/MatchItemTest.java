@@ -126,7 +126,7 @@ class MatchItemTest {
     }
 
     @Test
-    void 고정_드롭이_없는_블럭은_클라이언트와_같은_확률표로_정한다() {
+    void 고정_드롭이_없는_블럭은_클라이언트와_같은_비율표로_정한다() {
         // (5,0)이 터지면 (4,0)은 부서지고 (6,0) 단단한 블럭은 한 단계 약해진다. 난수는 (4,0)에만 쓴다: 나옴, 롤러 구간
         ScriptedRandom random = new ScriptedRandom(0.1, 0.5);
         Match match = playing(random);
@@ -153,6 +153,28 @@ class MatchItemTest {
     }
 
     @Test
+    void 경기_중에_누가_나가도_확률은_경기를_열_때의_인원으로_센다() {
+        // 3P를 다른 연결에 두고 나가게 한다. 남은 사람은 두 명이지만 확률은 3명(37%) 그대로라 0.36이면 나온다
+        long connThird = 103;
+        Match match = new Match(1, map, List.of(
+                new MatchPlayer(RED_1, CONN_RED, "빨강하나", Mascot.of("kkukku"), Team.RED, 1, map.spawns().get(0)),
+                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1)),
+                new MatchPlayer(RED_3, connThird, "빨강셋", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2))),
+                new ScriptedRandom(0.36, 0.5));
+        match.start(0);
+        match.loaded(CONN_RED, 0);
+        match.loaded(CONN_BLUE, 0);
+        match.loaded(connThird, 0);
+        match.tick(PLAY);
+        match.leave(connThird, "EXIT", false, PLAY);
+        assertEquals(Match.Phase.PLAYING, match.phase());
+
+        BalloonExploded exploded = explodeAt(match, 5, PLAY);
+
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "roller_shoe")), exploded.items());
+    }
+
+    @Test
     void 단단한_블럭은_다_부서질_때만_아이템을_정한다() {
         // 첫 폭발: (4,0)은 안 나옴(0.5). (6,0)은 b→a라 정하지 않는다. 두 번째 폭발: (6,0)이 부서져 물풍선 구간(0.0, 0.0)
         Match match = playing(new ScriptedRandom(0.5, 0.0, 0.0));
@@ -166,7 +188,7 @@ class MatchItemTest {
     }
 
     @Test
-    void 확률표에서_액티브가_나오면_아무것도_놓지_않는다() {
+    void 비율표에서_액티브가_나오면_아무것도_놓지_않는다() {
         // 나옴(0.0), 마지막 구간(0.99) = 스프링 신발
         Match match = playing(new ScriptedRandom(0.0, 0.99));
 

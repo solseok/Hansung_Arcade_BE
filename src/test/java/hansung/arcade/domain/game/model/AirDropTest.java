@@ -13,10 +13,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AirDropTest {
 
-    /** 5×2 맵. 윗줄은 모두 블럭(0~4번 칸), 아랫줄은 모두 빈 칸(5~9번 칸)이다 */
+    /**
+     * 5×2 맵. 윗줄(0~4번 칸)은 모두 막혀 있고 (1,0)은 부서지지 않는 집이다.
+     * 아랫줄(5~9번 칸)은 모두 지나갈 수 있고 (2,1)은 덤불이다
+     */
     private final GameMap halfBlocked = MapLoader.parse("t", List.of(
             "[floor]", ".....", ".....",
-            "[block]", "BBBBB", ".....",
+            "[block]", "BHBBB", "..T..",
             "[spawn]", ".....", "1...."));
 
     /** 블럭이 없는 15×13 맵. 클라이언트 AirDropTest의 맵과 크기가 같다 */
@@ -89,6 +92,46 @@ class AirDropTest {
 
         assertEquals(List.of(new Drop(2, 0, ItemType.SHOE), new Drop(4, 0, ItemType.FLUID)),
                 new AirDrop(halfBlocked, random, 3).plan());
+        assertTrue(random.isUsedUp());
+    }
+
+    @Test
+    void 덤불은_지나갈_수_있는_칸이라_다시_뽑지_않는다() {
+        // 첫 칸: 10칸의 7번 (2, 1) 덤불이라 그대로. 둘째 칸: 9칸의 4번 (4, 0) 블럭 → 다시 뽑아 9칸의 5번 (0, 1)
+        ScriptedRandom random = new ScriptedRandom(0.7, 0.0, 0.5, 0.0, 0.6, 0.0);
+
+        assertEquals(List.of(new Drop(2, 1, ItemType.BUBBLE), new Drop(0, 1, ItemType.BUBBLE)),
+                new AirDrop(halfBlocked, random, 3).plan());
+        assertTrue(random.isUsedUp());
+    }
+
+    @Test
+    void 부서지지_않는_집도_막힌_칸이라_다시_뽑는다() {
+        // 첫 칸: (1, 0) 집 → 다시 뽑아 10칸의 5번 (0, 1). 둘째 칸: 9칸의 8번 → 이미 고른 5번을 건너뛰어 9번 (4, 1)
+        ScriptedRandom random = new ScriptedRandom(0.1, 0.0, 0.5, 0.0, 0.9, 0.0);
+
+        assertEquals(List.of(new Drop(0, 1, ItemType.BUBBLE), new Drop(4, 1, ItemType.BUBBLE)),
+                new AirDrop(halfBlocked, random, 3).plan());
+        assertTrue(random.isUsedUp());
+    }
+
+    @Test
+    void 다_부서진_블럭_칸은_빈_칸으로_보고_고른다() {
+        halfBlocked.hitBlock(0, 0);
+        // 첫 칸: (0, 0)은 이제 빈 칸이라 그대로. 둘째 칸: 9칸의 4번 → 이미 고른 0번을 건너뛰어 5번 (0, 1)
+        ScriptedRandom random = new ScriptedRandom(0.0, 0.0, 0.5, 0.0);
+
+        assertEquals(List.of(new Drop(0, 0, ItemType.BUBBLE), new Drop(0, 1, ItemType.BUBBLE)),
+                new AirDrop(halfBlocked, random, 3).plan());
+        assertTrue(random.isUsedUp());
+    }
+
+    @Test
+    void 칸이_하나뿐인_맵에서는_한_칸만_고른다() {
+        GameMap single = MapLoader.parse("t", List.of("[floor]", ".", "[block]", ".", "[spawn]", "1"));
+        ScriptedRandom random = new ScriptedRandom(0.5, 0.5);
+
+        assertEquals(List.of(new Drop(0, 0, ItemType.SHOE)), new AirDrop(single, random, 3).plan());
         assertTrue(random.isUsedUp());
     }
 

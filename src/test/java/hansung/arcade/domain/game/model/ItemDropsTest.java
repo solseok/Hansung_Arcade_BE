@@ -45,6 +45,9 @@ class ItemDropsTest {
         assertEquals(0.33, ItemDrops.dropChanceFor(2));
         assertEquals(0.37, ItemDrops.dropChanceFor(3));
         assertEquals(0.41, ItemDrops.dropChanceFor(4));
+        assertEquals(0.45, ItemDrops.dropChanceFor(5));
+        assertEquals(0.49, ItemDrops.dropChanceFor(6));
+        assertEquals(0.53, ItemDrops.dropChanceFor(7));
         assertEquals(0.57, ItemDrops.dropChanceFor(8));
         // 최대 인원을 넘겨도 최대 인원으로 센다
         assertEquals(0.57, ItemDrops.dropChanceFor(9));

@@ -3,7 +3,6 @@ package hansung.arcade.domain.game.model;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Predicate;
 import java.util.random.RandomGenerator;
 
 /**
@@ -52,19 +51,11 @@ public final class AirDrop {
         return 1 + PlayerCount.extra(players);
     }
 
-    public int attempts() {
-        return attempts;
-    }
-
-    /** 이번에 나올 비행기가 떨어뜨리려는 칸들. 서로 다른 칸이고, 막힌 칸은 인원만큼 다시 뽑아 피한다 */
-    public List<Drop> plan() {
-        return plan(cell -> !map.isSolid(cell.col(), cell.row()));
-    }
-
     /**
-     * @param droppable 떨어뜨릴 수 있는 칸인지. 아니면 다시 뽑는다
+     * 이번에 나올 비행기가 떨어뜨리려는 칸들. 서로 다른 칸이고, 지금 막힌 칸(지나갈 수 없는 칸)은 인원만큼 다시 뽑아 피한다.
+     * 덤불처럼 지나갈 수 있는 칸은 막히지 않은 칸이다.
      */
-    List<Drop> plan(Predicate<Cell> droppable) {
+    public List<Drop> plan() {
         int cells = map.columns() * map.rows();
         List<Drop> drops = new ArrayList<>();
         List<Integer> taken = new ArrayList<>();
@@ -74,7 +65,7 @@ public final class AirDrop {
             for (int attempt = 0; attempt < attempts; attempt++) {
                 index = unchosen(cells, taken);
                 drop = new Drop(index % map.columns(), index / map.columns(), CARGO.get(pick(CARGO.size())));
-                if (droppable.test(new Cell(drop.col(), drop.row()))) {
+                if (!map.isSolid(drop.col(), drop.row())) {
                     break;
                 }
             }
