@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -280,6 +281,9 @@ public final class Match {
         afterLeaving(now, events);
     }
 
+    /**
+     * 나가거나 끊긴 사람이 먹은 아이템은 흩뿌리지 않고 함께 사라진다. 명세(PLAYER_POPPED·ITEM_SCATTERED)는 터질 때만 다룬다.
+     */
     private void removeConnection(long connectionId, String reason, boolean notifyLeaver, List<MatchEvent> events) {
         List<Long> recipients = List.copyOf(connections);
         connections.remove(connectionId);
@@ -509,7 +513,8 @@ public final class Match {
     }
 
     /**
-     * 터뜨린다. PLAYER_POPPED 바로 뒤에, 먹은 아이템이 있었으면 흩뿌리고 ITEM_SCATTERED를 보낸다.
+     * 터뜨린다. PLAYER_POPPED 바로 뒤에 먹은 아이템을 흩뿌리고, 하나라도 놓였으면 ITEM_SCATTERED를 보낸다
+     * (놓을 칸이 하나도 없으면 보내지 않는다).
      *
      * @param killer 닿아서 터뜨린 사람. 시간이 지나 터졌으면 null
      */
@@ -544,7 +549,9 @@ public final class Match {
      *       후보가 모자랄 때 사라지는 아이템까지 먹은 순서와 관계없게 한다.</li>
      * </ul>
      * <p>물줄기가 남은 칸도 뺀다. 클라이언트는 물줄기 칸의 아이템을 바로 지우므로(GameWorld) 놓으면 화면과 어긋난다.
-     * 사람이 서 있는 칸은 막지 않는다. 후보가 모자라면 놓을 수 있는 만큼만 놓고 나머지는 사라진다.</p>
+     * 경기 중인 사람(살아 있거나 갇힌 사람)이 서 있는 칸도 뺀다. 클라이언트는 아이템 칸에 들어설 때 한 번만 ITEM_PICKUP을
+     * 보내므로, 발밑에 떨어진 아이템은 그 사람이 칸을 떠났다 돌아오기 전까지 아무도 줍지 못하고 남는다.
+     * 후보가 모자라면 놓을 수 있는 만큼만 놓고 나머지는 사라진다.</p>
      *
      * @return 놓인 아이템. 흩뿌릴 아이템이나 후보 칸이 없으면 비어 있다
      */
@@ -552,12 +559,18 @@ public final class Match {
         if (taken.isEmpty()) {
             return List.of();
         }
+        Set<Cell> occupied = new HashSet<>();
+        for (MatchPlayer player : players.values()) {
+            if (player.state() == MatchPlayer.State.ALIVE || player.state() == MatchPlayer.State.TRAPPED) {
+                occupied.add(player.cell());
+            }
+        }
         List<Cell> candidates = new ArrayList<>();
         for (int row = 0; row < map.rows(); row++) {
             for (int col = 0; col < map.columns(); col++) {
                 Cell cell = new Cell(col, row);
                 if (map.tileAt(col, row) == Tile.FLOOR && balloonAt(cell) == null && itemAt(cell) == null
-                        && flameAt(cell, now) == null) {
+                        && flameAt(cell, now) == null && !occupied.contains(cell)) {
                     candidates.add(cell);
                 }
             }
