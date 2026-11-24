@@ -703,10 +703,10 @@ public final class Match {
         }
         for (Iterator<Airplane> it = airplanes.iterator(); it.hasNext(); ) {
             Airplane airplane = it.next();
-            while (!airplane.drops().isEmpty() && airplane.drops().get(0).passAt() <= now) {
-                release(airplane.airplaneId(), airplane.drops().remove(0).drop(), now, events);
+            while (!airplane.ahead.isEmpty() && airplane.ahead.peek().passAt() <= now) {
+                release(airplane.airplaneId, airplane.ahead.poll().drop(), now, events);
             }
-            if (airplane.drops().isEmpty()) {
+            if (airplane.ahead.isEmpty()) {
                 it.remove();
             }
         }
@@ -721,7 +721,7 @@ public final class Match {
             drops.add(new PassingDrop(drop, now + AirDrop.passMs(map, heading, drop.col())));
         }
         drops.sort(Comparator.comparingLong(PassingDrop::passAt));
-        airplanes.add(new Airplane(airplaneId, drops));
+        airplanes.add(new Airplane(airplaneId, new ArrayDeque<>(drops)));
         events.add(toAll(MatchMessages.AIRPLANE_APPEARED, new AirplaneAppeared(airplaneId, heading.name())));
     }
 
@@ -740,7 +740,8 @@ public final class Match {
     }
 
     /**
-     * 비행기가 지나가는 순간 이 칸에 떨어뜨릴 수 있는지. 아래 중 하나라도 있으면 떨어뜨리지 않는다 (덤불 칸은 떨어뜨린다).
+     * 비행기가 지나가는 순간 이 칸에 떨어뜨릴 수 있는지. 지나간 시각이 아니라 그 뒤 처음 처리하는 tick 시각(now)의 칸을 본다
+     * (tick이 수십 ms마다라 많아야 한 tick 차이다). 아래 중 하나라도 있으면 떨어뜨리지 않는다 (덤불 칸은 떨어뜨린다).
      * <ul>
      *   <li>막힌 칸 (블럭·집 등 지나갈 수 없는 칸, 맵 바깥)</li>
      *   <li>물풍선, 이미 놓인 아이템</li>
@@ -822,8 +823,17 @@ public final class Match {
     private record FieldItem(int itemId, ItemType type, Cell cell) {
     }
 
-    /** 날고 있는 비행기. drops는 아직 지나가지 않은 칸이고, 지나가는 순서다 */
-    private record Airplane(int airplaneId, List<PassingDrop> drops) {
+    /** 날고 있는 비행기 */
+    private static final class Airplane {
+
+        private final int airplaneId;
+        /** 아직 지나가지 않은 칸. 지나가는 순서다 */
+        private final Deque<PassingDrop> ahead;
+
+        Airplane(int airplaneId, Deque<PassingDrop> ahead) {
+            this.airplaneId = airplaneId;
+            this.ahead = ahead;
+        }
     }
 
     /** 비행기가 떨어뜨리려는 칸과, 떨어뜨리는 자리가 그 열을 지나는 시각 */

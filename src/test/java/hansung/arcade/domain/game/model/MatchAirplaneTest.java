@@ -17,8 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MatchAirplaneTest {
 
     /*
-     * 7×3 맵(21칸, 칸 번호 = row × 7 + col). (0,0)은 블럭, (1,0)은 덤불, 나머지는 빈 바닥.
-     * 1P(0,2)는 빨강(연결 1), 2P(6,2)는 파랑(연결 2). 두 명이라 막힌 칸도 다시 뽑지 않는다
+     * 7×3 맵(21칸, 칸 번호 = row × 7 + col). (0,0)은 고정 드롭 물풍선이 있는 블럭, (1,0)은 덤불, 나머지는 빈 바닥.
+     * 1P(0,2)는 빨강(연결 1), 2P(6,2)는 파랑(연결 2). 두 명이라 막힌 칸도 다시 뽑지 않는다.
+     * 세 명 경기면 3P(6,0)가 빨강(연결 3)이다
      */
     private static final List<String> MAP = List.of(
             "[floor]",
@@ -30,15 +31,21 @@ class MatchAirplaneTest {
             ".......",
             ".......",
             "[spawn]",
+            "......3",
             ".......",
+            "1.....2",
+            "[item]",
+            "b......",
             ".......",
-            "1.....2");
+            ".......");
     private static final int CELLS = 21;
 
     private static final long RED = 1;
     private static final long BLUE = 2;
     private static final long CONN_RED = 101;
     private static final long CONN_BLUE = 102;
+    private static final long RED_2 = 3;
+    private static final long CONN_RED_2 = 103;
     private static final long PLAY = Match.COUNTDOWN_MS;
     private static final long ENDS_AT = PLAY + Match.TIME_LIMIT_MS;
     /** 첫 비행기가 나오는 시각 (남은 시간 1:59) */
@@ -59,6 +66,30 @@ class MatchAirplaneTest {
         match.tick(PLAY);
         assertEquals(Match.Phase.PLAYING, match.phase());
         return match;
+    }
+
+    /** 빨강 둘(1P, 3P는 다른 연결)과 파랑 하나. 빨강 하나가 빠져도 경기가 이어진다 */
+    private Match playingWithSecondRed(RandomGenerator random) {
+        Match match = new Match(1, map, List.of(
+                new MatchPlayer(RED, CONN_RED, "빨강", Mascot.of("kkukku"), Team.RED, 1, map.spawns().get(0)),
+                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1)),
+                new MatchPlayer(RED_2, CONN_RED_2, "빨강둘", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2))),
+                random);
+        match.start(0);
+        match.loaded(CONN_RED, 0);
+        match.loaded(CONN_BLUE, 0);
+        match.loaded(CONN_RED_2, 0);
+        match.tick(PLAY);
+        assertEquals(Match.Phase.PLAYING, match.phase());
+        return match;
+    }
+
+    /** player가 (col, row)로 가서 at에 물풍선을 놓고, 물줄기가 닿지 않는 escape 칸으로 비켜선다 */
+    private static void placeAndStep(Match match, long connectionId, long playerId, Cell at, Cell escape, long now) {
+        match.move(connectionId, playerId, GameMap.centerX(at.col()), GameMap.centerY(at.row()), Facing.DOWN, false, now);
+        assertEquals(1, match.placeBalloon(connectionId, playerId, at.col(), at.row(), now).size());
+        match.move(connectionId, playerId, GameMap.centerX(escape.col()), GameMap.centerY(escape.row()), Facing.DOWN,
+                false, now);
     }
 
     /**
@@ -121,7 +152,7 @@ class MatchAirplaneTest {
     }
 
     @Test
-    void 출현_시각보다_1초_넘게_늦은_tick에서는_그_비행기를_건너뛴다() {
+    void 출현_시각보다_1초_이상_늦은_tick에서는_그_비행기를_건너뛴다() {
         Match match = playing(new SplittableRandom(20261124));
 
         // 첫 출현(1:59)을 0.999초 늦게 처리하면 띄운다
@@ -134,15 +165,46 @@ class MatchAirplaneTest {
     }
 
     @Test
-    void 고른_칸의_열을_지나는_순간_떨어뜨리고_떨어지는_시간을_알린다() {
+    void 출현_시각보다_딱_1초_늦으면_건너뛴다() {
+        Match match = playing(new SplittableRandom(20261124));
+
+        assertEquals(List.of(), bodies(match.tick(FIRST + AirDrop.LATE_SKIP_MS), MatchMessages.AIRPLANE_APPEARED,
+                AirplaneAppeared.class));
+    }
+
+    @Test
+    void 고른_칸의_열을_지나는_순간_떨어뜨리고_방_전체에_알린다() {
         ScriptedRandom random = new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID));
         Match match = playing(random);
-        match.tick(FIRST);
+        List<MatchEvent> appeared = match.tick(FIRST);
         assertTrue(random.isUsedUp());
 
         assertEquals(List.of(), drops(match.tick(firstPass(3) - 1)));
-        assertEquals(List.of(new ItemDropped(1, 1, 3, 1, "bubble", AirDrop.fallMs(1))), drops(match.tick(firstPass(3))));
+        List<MatchEvent> first = match.tick(firstPass(3));
+        assertEquals(List.of(new ItemDropped(1, 1, 3, 1, "bubble", AirDrop.fallMs(1))), drops(first));
         assertEquals(List.of(new ItemDropped(1, 2, 5, 1, "fluid", AirDrop.fallMs(1))), drops(match.tick(firstPass(5))));
+        assertEquals(List.of(CONN_RED, CONN_BLUE), appeared.get(0).recipients());
+        assertEquals(List.of(CONN_RED, CONN_BLUE), first.get(0).recipients());
+    }
+
+    @Test
+    void 늦게_띄운_비행기는_띄운_때부터_지나는_시각을_센다() {
+        // 0.5초 늦게 띄우면 클라이언트도 그때부터 그리므로 지나는 시각도 0.5초 늦다
+        Match match = playing(new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        long launchedAt = FIRST + 500;
+        match.tick(launchedAt);
+
+        assertEquals(List.of(), drops(match.tick(launchedAt + AirDrop.passMs(map, Facing.RIGHT, 3) - 1)));
+        assertEquals(1, drops(match.tick(launchedAt + AirDrop.passMs(map, Facing.RIGHT, 3))).size());
+    }
+
+    @Test
+    void 같은_열의_두_칸은_같은_순간_고른_순서대로_떨어뜨린다() {
+        Match match = playing(new ScriptedRandom(plan(new Cell(3, 0), ItemType.SHOE, new Cell(3, 2), ItemType.FLUID)));
+        match.tick(FIRST);
+
+        assertEquals(List.of(new ItemDropped(1, 1, 3, 0, "shoe", AirDrop.fallMs(0)),
+                new ItemDropped(1, 2, 3, 2, "fluid", AirDrop.fallMs(2))), drops(match.tick(firstPass(3))));
     }
 
     @Test
@@ -259,5 +321,87 @@ class MatchAirplaneTest {
 
         assertEquals(List.of(MatchMessages.ITEM_TAKEN), taken.stream().map(MatchEvent::type).toList());
         assertEquals(bubble.itemId(), ((ItemTaken) taken.get(0).body()).itemId());
+    }
+
+    @Test
+    void 몸의_오른쪽_끝이나_아래쪽_끝이_칸_경계에_딱_닿기만_하면_막지_않는다() {
+        // 빨강 몸의 오른쪽 끝이 (2,1)과 (3,1)의 경계에 닿는다
+        Match right = playing(new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        right.move(CONN_RED, RED, GameMap.centerX(2) + 2, GameMap.centerY(1), Facing.RIGHT, false, FIRST);
+        right.tick(FIRST);
+        assertEquals(1, drops(right.tick(firstPass(3))).size());
+
+        // 빨강 몸의 아래쪽 끝이 (3,0)과 (3,1)의 경계에 닿으면 막지 않고, 1px 걸치면 막는다
+        Match touching = playing(new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        touching.move(CONN_RED, RED, GameMap.centerX(3), GameMap.centerY(0) + 2, Facing.DOWN, false, FIRST);
+        touching.tick(FIRST);
+        assertEquals(1, drops(touching.tick(firstPass(3))).size());
+
+        Match over = playing(new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        over.move(CONN_RED, RED, GameMap.centerX(3), GameMap.centerY(0) + 3, Facing.DOWN, false, FIRST);
+        over.tick(FIRST);
+        assertEquals(List.of(), drops(over.tick(firstPass(3))));
+    }
+
+    @Test
+    void 갇힌_사람의_몸도_막는다() {
+        // 3P가 (3,1)에서 자기 물풍선에 갇힌다. 물줄기는 지나가기 전에 사라지고, 터지기(5초)까지는 갇혀 있다
+        Match match = playingWithSecondRed(
+                new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        long explodeAt = FIRST - 500;
+        placeAndStep(match, CONN_RED_2, RED_2, new Cell(3, 1), new Cell(3, 1), explodeAt - Match.FUSE_MS);
+        match.tick(explodeAt);
+        assertEquals(MatchPlayer.State.TRAPPED, match.player(RED_2).state());
+        match.tick(FIRST);
+
+        assertEquals(List.of(), drops(match.tick(firstPass(3))));
+    }
+
+    @Test
+    void 터진_사람과_나간_사람의_몸은_막지_않는다() {
+        // 3P가 (3,1)에서 갇혔다가 첫 비행기가 나올 때 시간이 다 되어 터진다
+        Match popped = playingWithSecondRed(
+                new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        long explodeAt = FIRST - Match.POP_MS;
+        placeAndStep(popped, CONN_RED_2, RED_2, new Cell(3, 1), new Cell(3, 1), explodeAt - Match.FUSE_MS);
+        popped.tick(explodeAt);
+        popped.tick(FIRST);
+        assertEquals(MatchPlayer.State.POPPED, popped.player(RED_2).state());
+        assertEquals(1, drops(popped.tick(firstPass(3))).size());
+
+        // 3P가 (3,1)에 선 채 나간다
+        Match left = playingWithSecondRed(
+                new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        left.move(CONN_RED_2, RED_2, GameMap.centerX(3), GameMap.centerY(1), Facing.DOWN, false, FIRST);
+        left.leave(CONN_RED_2, "EXIT", false, FIRST);
+        left.tick(FIRST);
+        assertEquals(1, drops(left.tick(firstPass(3))).size());
+    }
+
+    @Test
+    void 블럭에서_나온_아이템_다음_번호를_이어서_쓴다() {
+        // (0,1)의 물풍선이 (0,0) 블럭을 부숴 고정 드롭 물풍선이 1번으로 나온다
+        Match match = playing(new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        long explodeAt = FIRST - 1_000;
+        placeAndStep(match, CONN_RED, RED, new Cell(0, 1), new Cell(3, 2), explodeAt - Match.FUSE_MS);
+        match.tick(explodeAt);
+        match.tick(FIRST);
+
+        assertEquals(List.of(new ItemDropped(1, 2, 3, 1, "bubble", AirDrop.fallMs(1))), drops(match.tick(firstPass(3))));
+    }
+
+    @Test
+    void 지나는_순간에_경기가_끝나면_떨어뜨리지_않고_GAME_OVER만_보낸다() {
+        // 파랑이 갇혀 있다가 (3,1)을 지나는 그 tick에 시간이 다 되어 터지고, 빨강만 남아 경기가 끝난다
+        Match match = playing(new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
+        long explodeAt = firstPass(3) - Match.POP_MS;
+        placeAndStep(match, CONN_BLUE, BLUE, new Cell(6, 1), new Cell(6, 1), explodeAt - Match.FUSE_MS);
+        match.tick(explodeAt);
+        match.tick(FIRST);
+
+        List<MatchEvent> events = match.tick(firstPass(3));
+
+        assertEquals(List.of(), drops(events));
+        assertEquals(MatchMessages.GAME_OVER, events.get(events.size() - 1).type());
     }
 }

@@ -98,7 +98,10 @@ public final class MatchMessages {
     }
 
     /**
-     * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 서버는 보낸 순간부터 아이템이 맵에 있다고 본다
+     * 서버는 보낸 순간부터 아이템이 맵에 있다고 본다. 그래서 클라이언트는 떨어지는 동안 removedItems·ITEM_TAKEN에 이 itemId가
+     * 오면 놓지 않고, 닿는 순간 발밑에 있으면 ITEM_PICKUP을 보낸다 (Notion ITEM_DROPPED 클라이언트 주의사항).
+     *
+     * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 떨어지는 그림에만 쓴다
      */
     public record ItemDropped(int airplaneId, int itemId, int col, int row, String item, long fallMs) {
     }
