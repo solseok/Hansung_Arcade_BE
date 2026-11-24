@@ -85,8 +85,8 @@ public final class Match {
     private final Map<Integer, FieldItem> items = new LinkedHashMap<>();
     /** 아이템이 나올지·무엇인지, 흩뿌릴 칸을 정하는 난수 */
     private final RandomGenerator random;
-    /** 블럭이 다 부서졌을 때 아이템이 나올 확률. 경기를 열 때의 인원으로 정한다 ({@link ItemDrops#dropChanceFor}) */
-    private final double dropChance;
+    /** 경기를 열 때의 인원 (한 연결의 1P·2P는 두 명). 블럭에서 아이템이 나올 확률을 정한다 */
+    private final int playerCount;
 
     private Phase phase = Phase.LOADING;
     private long loadDeadline;
@@ -105,7 +105,7 @@ public final class Match {
         this.matchId = matchId;
         this.map = map;
         this.random = Objects.requireNonNull(random);
-        this.dropChance = ItemDrops.dropChanceFor(participants.size());
+        this.playerCount = participants.size();
         for (MatchPlayer player : participants) {
             if (players.putIfAbsent(player.playerId(), player) != null) {
                 throw new IllegalArgumentException("playerId가 겹칩니다: " + player.playerId());
@@ -587,13 +587,13 @@ public final class Match {
     }
 
     /**
-     * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 확률표로 정한다.
-     * 나올 확률은 경기 인원에 맞춘 {@link #dropChance}다.
+     * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 비율표로 정한다.
+     * 나올 확률은 경기 인원에 맞춘다 ({@link ItemDrops#dropChanceFor}). 고정 드롭에는 난수를 쓰지 않는다.
      * 서버는 아직 액티브 아이템(바늘·보호막·스프링 신발)을 다루지 않으므로, 정해진 것이 액티브면 아무것도 놓지 않는다.
      */
     private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
         return map.takeFixedDrop(cell.col(), cell.row())
-                .or(() -> ItemDrops.roll(random, dropChance))
+                .or(() -> ItemDrops.roll(random, playerCount))
                 .filter(item -> !item.isActive())
                 .map(item -> placeItem(cell, item));
     }

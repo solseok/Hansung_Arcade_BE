@@ -8,6 +8,7 @@ import hansung.arcade.domain.game.model.MatchMessages.ItemTaken;
 import hansung.arcade.domain.game.model.MatchMessages.Stats;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.random.RandomGenerator;
@@ -54,13 +55,20 @@ class MatchItemTest {
 
     private final GameMap map = MapLoader.parse("test/items", MAP);
 
-    /** 경기를 열고 PLAYING까지 진행한다. 지금 시각은 {@link #PLAY} */
+    /** 세 명으로 경기를 열고 PLAYING까지 진행한다. 지금 시각은 {@link #PLAY} */
     private Match playing(RandomGenerator random) {
-        Match match = new Match(1, map, List.of(
+        return playing(random, true);
+    }
+
+    /** @param withThird 3P까지 세 명이면 true, 1P·2P 두 명이면 false */
+    private Match playing(RandomGenerator random, boolean withThird) {
+        List<MatchPlayer> players = new ArrayList<>(List.of(
                 new MatchPlayer(RED_1, CONN_RED, "빨강하나", Mascot.of("kkukku"), Team.RED, 1, map.spawns().get(0)),
-                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1)),
-                new MatchPlayer(RED_3, CONN_RED, "빨강셋", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2))),
-                random);
+                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1))));
+        if (withThird) {
+            players.add(new MatchPlayer(RED_3, CONN_RED, "빨강셋", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2)));
+        }
+        Match match = new Match(1, map, players, random);
         match.start(0);
         match.loaded(CONN_RED, 0);
         match.loaded(CONN_BLUE, 0);
@@ -118,7 +126,7 @@ class MatchItemTest {
     }
 
     @Test
-    void 고정_드롭이_없는_블럭은_클라이언트와_같은_확률표로_정한다() {
+    void 고정_드롭이_없는_블럭은_클라이언트와_같은_비율표로_정한다() {
         // (5,0)이 터지면 (4,0)은 부서지고 (6,0) 단단한 블럭은 한 단계 약해진다. 난수는 (4,0)에만 쓴다: 나옴, 롤러 구간
         ScriptedRandom random = new ScriptedRandom(0.1, 0.5);
         Match match = playing(random);
@@ -128,6 +136,42 @@ class MatchItemTest {
         assertEquals(List.of(new ChangedTile(4, 0, "."), new ChangedTile(6, 0, "a")), exploded.tiles());
         assertEquals(List.of(new DroppedItem(1, 4, 0, "roller_shoe")), exploded.items());
         assertTrue(random.isUsedUp());
+    }
+
+    @Test
+    void 블럭에서_아이템이_나올_확률은_경기를_열_때의_인원으로_센다() {
+        // 0.36은 2명(33%)이면 안 나오고, 3명(37%, 1P·3P는 한 연결)이면 나온다. 둘째 난수 0.5는 롤러 구간
+        ScriptedRandom threeRandom = new ScriptedRandom(0.36, 0.5);
+        BalloonExploded three = explodeAt(playing(threeRandom, true), 5, PLAY);
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "roller_shoe")), three.items());
+        assertTrue(threeRandom.isUsedUp());
+
+        ScriptedRandom twoRandom = new ScriptedRandom(0.36);
+        BalloonExploded two = explodeAt(playing(twoRandom, false), 5, PLAY);
+        assertEquals(List.of(), two.items());
+        assertTrue(twoRandom.isUsedUp());
+    }
+
+    @Test
+    void 경기_중에_누가_나가도_확률은_경기를_열_때의_인원으로_센다() {
+        // 3P를 다른 연결에 두고 나가게 한다. 남은 사람은 두 명이지만 확률은 3명(37%) 그대로라 0.36이면 나온다
+        long connThird = 103;
+        Match match = new Match(1, map, List.of(
+                new MatchPlayer(RED_1, CONN_RED, "빨강하나", Mascot.of("kkukku"), Team.RED, 1, map.spawns().get(0)),
+                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, map.spawns().get(1)),
+                new MatchPlayer(RED_3, connThird, "빨강셋", Mascot.of("kkukku"), Team.RED, 3, map.spawns().get(2))),
+                new ScriptedRandom(0.36, 0.5));
+        match.start(0);
+        match.loaded(CONN_RED, 0);
+        match.loaded(CONN_BLUE, 0);
+        match.loaded(connThird, 0);
+        match.tick(PLAY);
+        match.leave(connThird, "EXIT", false, PLAY);
+        assertEquals(Match.Phase.PLAYING, match.phase());
+
+        BalloonExploded exploded = explodeAt(match, 5, PLAY);
+
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "roller_shoe")), exploded.items());
     }
 
     @Test
@@ -144,18 +188,7 @@ class MatchItemTest {
     }
 
     @Test
-    void 나올_확률은_경기를_열_때의_인원으로_정한다() {
-        // 이 경기는 세 명이라 37%다. 첫 난수 0.36이면 2명 경기(33%)에서는 안 나오지만 여기서는 나온다
-        Match three = playing(new ScriptedRandom(0.36, 0.0));
-        assertEquals(List.of(new DroppedItem(1, 4, 0, "bubble")), explodeAt(three, 5, PLAY).items());
-
-        // 0.37이면 세 명 경기에서도 안 나온다
-        Match boundary = playing(new ScriptedRandom(0.37));
-        assertEquals(List.of(), explodeAt(boundary, 5, PLAY).items());
-    }
-
-    @Test
-    void 확률표에서_액티브가_나오면_아무것도_놓지_않는다() {
+    void 비율표에서_액티브가_나오면_아무것도_놓지_않는다() {
         // 나옴(0.0), 마지막 구간(0.99) = 스프링 신발
         Match match = playing(new ScriptedRandom(0.0, 0.99));
 

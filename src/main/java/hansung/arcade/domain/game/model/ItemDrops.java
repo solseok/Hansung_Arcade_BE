@@ -8,22 +8,18 @@ import java.util.random.RandomGenerator;
 
 /**
  * 고정 드롭이 없는 블럭이 다 부서질 때 아이템이 나오는지와 어떤 아이템인지 정한다.
- * 클라이언트 {@code hansung.arcade.ingame.item.ItemDrops}와 확률, 비율, 난수 쓰는 순서가 같다.
+ * 클라이언트 {@code hansung.arcade.ingame.item.ItemDrops}와 비율, 난수 쓰는 순서가 같다.
  *
- * <p>나올 확률은 경기 인원에 맞춘다 (Notion BALLOON_EXPLODED). 2명까지는 {@link #DROP_CHANCE}(33%)이고, 한 명 늘 때마다
+ * <p>나올 확률은 경기 인원에 맞춘다. 2명까지는 {@link #DROP_CHANCE}(33%, 클라이언트와 같다)이고, 한 명 늘 때마다
  * {@link #DROP_CHANCE_PER_EXTRA_PLAYER}(4%p)씩 올라 8명이면 57%다. 블럭 수는 그대로인데 나눠 먹을 사람이 늘어서
- * 그만큼 더 뿌린다.</p>
+ * 그만큼 아이템을 더 뿌린다. 인원은 {@link PlayerCount}로 센다.</p>
  */
 final class ItemDrops {
 
     /** 2명 이하 경기에서 블럭이 부서졌을 때 아이템이 나올 확률 */
     static final double DROP_CHANCE = 0.33;
-    /** 2명을 넘는 한 명마다 더하는 확률 */
+    /** 2명을 넘는 한 명마다 더하는 확률 (8명까지) */
     static final double DROP_CHANCE_PER_EXTRA_PLAYER = 0.04;
-    /** 확률을 늘리기 시작하는 인원. 이 인원까지는 {@link #DROP_CHANCE} 그대로다 */
-    static final int BASE_PLAYERS = 2;
-    /** 이보다 많아도 이 인원으로 센다 */
-    static final int MAX_PLAYERS = 8;
     /** 아이템이 나왔을 때 종류별 비율(%). 합이 100이고, 이 순서({@link ItemType} 선언 순서)대로 난수 구간을 나눈다 */
     static final Map<ItemType, Integer> WEIGHTS = weights();
 
@@ -31,29 +27,23 @@ final class ItemDrops {
     }
 
     /**
-     * players명 경기에서 블럭이 부서졌을 때 아이템이 나올 확률.
-     * {@link #BASE_PLAYERS}명까지는 {@link #DROP_CHANCE}이고, 넘는 한 명마다 {@link #DROP_CHANCE_PER_EXTRA_PLAYER}씩 더한다.
-     * 인원은 {@link #MAX_PLAYERS}명까지만 센다.
+     * players명 경기에서 블럭이 다 부서졌을 때 아이템이 나올 확률 (2명 이하 0.33, 3명 0.37, 8명 이상 0.57).
      *
-     * @param players 경기를 열 때의 참가자 수 (1P·2P를 따로 센다)
+     * @throws IllegalArgumentException 인원이 한 명보다 적으면
      */
     static double dropChanceFor(int players) {
-        if (players < 1) {
-            throw new IllegalArgumentException("경기 인원은 한 명 이상이어야 합니다: " + players);
-        }
-        int extra = Math.max(0, Math.min(players, MAX_PLAYERS) - BASE_PLAYERS);
-        // 0.33 + 6 × 0.04가 0.5700000000000001이 되지 않도록 0.01% 단위로 맞춘다 (클라이언트와 같다)
+        int extra = PlayerCount.extra(players);
+        // 0.33 + 6 × 0.04가 0.5700000000000001이 되지 않도록 0.01% 단위로 맞춘다
         return Math.round((DROP_CHANCE + extra * DROP_CHANCE_PER_EXTRA_PLAYER) * 10_000) / 10_000.0;
     }
 
     /**
-     * 블럭 하나가 다 부서졌을 때 나올 아이템. 난수를 두 번까지 쓴다 (나오는지, 무엇인지).
+     * players명 경기에서 블럭 하나가 다 부서졌을 때 나올 아이템. 난수를 두 번까지 쓴다 (나오는지, 무엇인지).
      *
-     * @param dropChance 아이템이 나올 확률 ({@link #dropChanceFor(int)})
      * @return 나온 아이템. 액티브 아이템일 수도 있다. 안 나오면 비어 있다
      */
-    static Optional<ItemType> roll(RandomGenerator random, double dropChance) {
-        if (random.nextDouble() >= dropChance) {
+    static Optional<ItemType> roll(RandomGenerator random, int players) {
+        if (random.nextDouble() >= dropChanceFor(players)) {
             return Optional.empty();
         }
         double pick = random.nextDouble() * 100;
