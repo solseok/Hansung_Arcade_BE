@@ -462,7 +462,8 @@ public final class Match {
      * 맵 안의 바닥 타일이어야 하고(블럭·덤불·집 등이 없음), 물풍선·아이템·물줄기와 몸이 조금이라도 걸친 사람이 없어야 한다.
      * 쓰러지는 연출 중인 사람도 막는다. 물줄기가 남은 칸에 들어간 상자는 바로 부서질 수 있는데,
      * 거기서 나온 아이템이 그 물줄기에 바로 사라지므로 밀지 않는다.
-     * 클라이언트는 스프링 신발로 내려앉을 칸도 막지만, 서버는 아직 점프를 다루지 않는다.
+     * 스프링 신발로 내려앉을 칸도 막는다 (클라이언트 CellOccupancy.Occupant.JUMP_LANDING). 서버는 뛰는 순간 위치를
+     * 내려앉을 칸 가운데로 옮기므로({@link MatchPlayer#jumpTo}) 아래 몸 검사가 그 칸을 막는다.
      */
     private boolean canReceiveBox(Cell cell, long now) {
         if (!map.isInside(cell.col(), cell.row()) || !map.tileAt(cell.col(), cell.row()).isGround()
