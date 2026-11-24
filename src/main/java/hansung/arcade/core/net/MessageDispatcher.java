@@ -67,7 +67,7 @@ public final class MessageDispatcher {
 
         try {
             Object body = handler.handle(connection, request);
-            if (request.expectsResponse() && !connection.isClosed()) {
+            if (body != MessageHandler.RESPONDED && request.expectsResponse() && !connection.isClosed()) {
                 connection.send(Message.ok(request, body));
             }
         } catch (ProtocolException e) {

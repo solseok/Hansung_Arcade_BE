@@ -18,6 +18,8 @@ package hansung.arcade.core.net;
  */
 @FunctionalInterface
 public interface MessageHandler {
+    /** 핸들러가 잠금 안에서 직접 응답을 보냈음을 뜻한다. 디스패처는 중복 응답하지 않는다. */
+    Object RESPONDED = new Object();
 
     /**
      * @return 요청에 id가 있으면 {@code ok:true} 응답의 body (record·Map·JsonNode, null이면 {@code {}}).

@@ -1,11 +1,18 @@
 package hansung.arcade.domain.game.model;
 
+import hansung.arcade.domain.game.model.MatchMessages.AirplaneAppeared;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonExploded;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonPlaced;
+import hansung.arcade.domain.game.model.MatchMessages.BoxMoved;
 import hansung.arcade.domain.game.model.MatchMessages.ChangedTile;
+import hansung.arcade.domain.game.model.MatchMessages.DroppedItem;
 import hansung.arcade.domain.game.model.MatchMessages.ExplodedBalloon;
 import hansung.arcade.domain.game.model.MatchMessages.GameOver;
 import hansung.arcade.domain.game.model.MatchMessages.GameStarted;
+import hansung.arcade.domain.game.model.MatchMessages.ItemDropped;
+import hansung.arcade.domain.game.model.MatchMessages.ItemScattered;
+import hansung.arcade.domain.game.model.MatchMessages.ItemTaken;
+import hansung.arcade.domain.game.model.MatchMessages.ItemUsed;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerLeft;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerMoved;
 import hansung.arcade.domain.game.model.MatchMessages.PlayerPopped;
@@ -14,18 +21,25 @@ import hansung.arcade.domain.game.model.MatchMessages.PlayerTrapped;
 import hansung.arcade.domain.game.model.MatchMessages.RoundBegin;
 import hansung.arcade.domain.game.model.MatchMessages.Standing;
 import hansung.arcade.domain.game.model.MatchMessages.StartedPlayer;
+import hansung.arcade.domain.game.model.MatchMessages.Stats;
 import hansung.arcade.global.exception.GameException;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.random.RandomGenerator;
 
 import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
 
@@ -39,6 +53,9 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * GAME_STARTED → (모든 연결 LOADED 또는 {@link #LOAD_TIMEOUT_MS}) → ROUND_BEGIN
  * → {@link #COUNTDOWN_MS} 뒤 PLAYING → (남은 팀 하나 · 모두 터짐 · {@link #TIME_LIMIT_MS}) → GAME_OVER
  * </pre>
+ *
+ * <p>PLAYING 동안 남은 시간이 {@link AirDrop#APPEARANCES_MS}가 되면 비행기가 나와(AIRPLANE_APPEARED) 맵을 가로지르며
+ * 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED). 아이템이 칸에 닿는 순간 그 칸에 선 사람이 있으면 바로 먹인다(ITEM_TAKEN).</p>
  *
  * <p>모든 public 메서드는 이 객체로 잠근다. 받는 스레드(MOVE 등)와 타이머 스레드(tick)가 함께 부른다.</p>
  */
@@ -60,10 +77,20 @@ public final class Match {
     public static final long POP_MS = 5_000;
     /** 구해진 뒤 빠져나오는 시간. 이 동안은 다시 갇히지 않는다 (클라이언트 Player.ESCAPE_SECONDS) */
     public static final long ESCAPE_MS = 500;
+    /** 터진 뒤 쓰러지는 연출 시간. 이 동안은 몸이 칸을 막는다 (클라이언트 Player.DYING_JUMP_SECONDS + DYING_BLINK_SECONDS) */
+    static final long DYING_MS = 2_000;
+    /** 밀린 상자가 한 칸 미끄러지는 시간. 이 동안은 그 상자를 다시 밀 수 없다 (클라이언트 BoxPusher.SLIDE_SECONDS) */
+    static final long SLIDE_MS = 200;
     /** 갇힌 뒤 적어도 이만큼(타이머 한 번)은 구해지거나 터지지 않는다. 갇힌 모습이 한 번은 보이도록 한다 */
     static final long MIN_TRAPPED_MS = 20;
     /** 두 캐릭터 중심이 가로·세로 모두 이보다 가까우면 닿은 것 (클라이언트 Player.TOUCH_DISTANCE) */
     static final double TOUCH_DISTANCE = GameMap.TILE_SIZE / 2.0;
+    /** 보호막이 물줄기를 막아 주는 시간 (클라이언트 PlayerGear.SHIELD_SECONDS) */
+    public static final long SHIELD_MS = 3_000;
+    /** 스프링 신발로 뛰어 내려앉기까지 (클라이언트 PlayerGear.JUMP_SECONDS) */
+    public static final long JUMP_MS = 400;
+    /** 스프링 신발로 뛰는 거리(칸). 바로 앞 칸을 넘어 그 너머 칸에 내려앉는다 (클라이언트 ItemActions.JUMP_TILES) */
+    static final int JUMP_TILES = 2;
 
     private final long matchId;
     private final GameMap map;
@@ -73,19 +100,43 @@ public final class Match {
     private final Set<Long> loaded = new LinkedHashSet<>();
     private final List<Balloon> balloons = new ArrayList<>();
     private final List<Flame> flames = new ArrayList<>();
+    /** 맵 바닥에 놓인 아이템. 한 칸에 하나뿐이다. itemId 순서 */
+    private final Map<Integer, FieldItem> items = new LinkedHashMap<>();
+    /** 밀려서 미끄러지는 중인 상자: 도착 칸 → 다 미끄러지는 시각 */
+    private final Map<Cell, Long> slidingUntil = new HashMap<>();
+    /** 아이템이 나올지·무엇인지, 흩뿌릴 칸을 정하는 난수 */
+    private final RandomGenerator random;
+    /** 경기를 열 때의 인원 (한 연결의 1P·2P는 두 명). 블럭에서 아이템이 나올 확률을 정한다 */
+    private final int playerCount;
+    /** 비행기가 떨어뜨릴 칸을 고른다 */
+    private final AirDrop airDrop;
+    /** 아직 떨어뜨릴 칸이 남은 비행기들. 나온 순서 */
+    private final List<Airplane> airplanes = new ArrayList<>();
+    /** 비행기에서 떨어져 아직 칸에 닿지 않은 아이템. 떨어뜨린 순서 */
+    private final List<FallingDrop> falling = new ArrayList<>();
+    /** 다음에 나올 비행기의 {@link AirDrop#APPEARANCES_MS} 차례 */
+    private int nextAppearance;
+    private int lastAirplaneId;
 
     private Phase phase = Phase.LOADING;
     private long loadDeadline;
     private long playStartsAt;
     private long endsAt;
     private int lastBalloonId;
+    private int lastItemId;
 
-    public Match(long matchId, GameMap map, List<MatchPlayer> participants) {
+    /**
+     * @param random 아이템 생성·흩뿌리기에 쓴다. 이 경기만 쓰도록 따로 만들어 넘긴다 (테스트는 시드를 고정한다)
+     */
+    public Match(long matchId, GameMap map, List<MatchPlayer> participants, RandomGenerator random) {
         if (participants.isEmpty()) {
             throw new IllegalArgumentException("플레이어가 없습니다.");
         }
         this.matchId = matchId;
         this.map = map;
+        this.random = Objects.requireNonNull(random);
+        this.playerCount = participants.size();
+        this.airDrop = new AirDrop(map, this.random, participants.size());
         for (MatchPlayer player : participants) {
             if (players.putIfAbsent(player.playerId(), player) != null) {
                 throw new IllegalArgumentException("playerId가 겹칩니다: " + player.playerId());
@@ -147,6 +198,7 @@ public final class Match {
     /**
      * MOVE. 맞지 않으면 조용히 버린다 (초당 20번이라 ERROR를 보내지 않는다).
      * 위치를 저장하고 다른 연결에 중계한 뒤, 그 위치로 물줄기·구출·터뜨리기를 판정한다.
+     * 스프링 신발로 공중에 있는 동안은 서버가 위치를 정하므로 버린다.
      */
     public synchronized List<MatchEvent> move(long connectionId, long playerId, double x, double y, Facing facing,
                                               boolean moving, long now) {
@@ -156,12 +208,14 @@ public final class Match {
             return List.of();
         }
         MatchPlayer mover = ownPlayer(connectionId, playerId);
-        if (mover == null || !mover.isInPlay()) {
+        if (mover == null || !mover.isInPlay() || mover.isAirborne(now)) {
             return List.of();
         }
+        List<MatchEvent> events = new ArrayList<>();
+        // 타이머보다 먼저 왔으면 내려앉기·보호막 끝을 먼저 처리한다. 내려앉은 칸의 아이템은 옮기기 전에 줍는다
+        endItemEffectsIfDue(mover, now, events);
         mover.moveTo(x, y, facing, moving);
 
-        List<MatchEvent> events = new ArrayList<>();
         events.add(new MatchEvent(othersThan(connectionId), MatchMessages.PLAYER_MOVED,
                 new PlayerMoved(playerId, x, y, facing.name(), moving)));
         trapIfWet(mover, now, events);
@@ -181,19 +235,24 @@ public final class Match {
             return List.of();
         }
         MatchPlayer owner = ownPlayer(connectionId, playerId);
+        if (owner == null) {
+            return List.of();
+        }
+        List<MatchEvent> events = new ArrayList<>();
+        // 타이머보다 먼저 왔으면 내려앉기·보호막 끝을 먼저 처리한다 (물줄기 위에 내려앉았으면 갇혀 놓지 못한다)
+        endItemEffectsIfDue(owner, now, events);
         Cell cell = new Cell(col, row);
-        if (owner == null || !owner.isFree(now)
+        if (!owner.isFree(now)
                 || owner.cell().distanceTo(cell) > 1
                 || map.isSolid(col, row) || balloonAt(cell) != null
                 || owner.placedBalloons() >= owner.balloonCapacity()) {
-            return List.of();
+            return events;
         }
         boolean wet = flameAt(cell, now) != null;
         long fuseMs = wet ? 0 : FUSE_MS;
         Balloon balloon = new Balloon(++lastBalloonId, owner.playerId(), cell, owner.waterRange(), now + fuseMs);
         balloons.add(balloon);
         owner.balloonPlaced();
-        List<MatchEvent> events = new ArrayList<>();
         events.add(toAll(MatchMessages.BALLOON_PLACED, new BalloonPlaced(balloon.balloonId(), owner.playerId(),
                 col, row, balloon.range(), fuseMs)));
         if (wet) {
@@ -202,6 +261,223 @@ public final class Match {
             finishIfDecided(events);
         }
         return events;
+    }
+
+    /**
+     * ITEM_PICKUP. 인정되면 방 전체에 ITEM_TAKEN을 보낸다. 인정되지 않으면 조용히 버린다.
+     * 아이템이 아직 있음, 마지막 MOVE 칸이 그 아이템 칸, 살아 있고 갇히지 않음 (Notion 명세), 스프링 신발로 공중에 있지 않음.
+     * 구출된 뒤 빠져나오는 중이어도 받는다. 클라이언트는 칸에 들어설 때 한 번만 보내므로, 여기서 버리면 아이템이 맵에 남는다.
+     * lock 안에서 처리하므로 두 사람이 같은 아이템을 보내면 먼저 온 쪽만 먹고, 늦은 쪽은 아이템이 없어 버려진다.
+     *
+     * <p>칸은 마지막 MOVE로만 본다 (물풍선 놓기와 달리 이웃 칸 여유가 없다). 그래서 클라이언트는 아이템 칸에 들어선 위치를
+     * MOVE로 먼저 보내고 ITEM_PICKUP을 보내야 한다. 같은 연결의 메시지는 보낸 차례대로 처리된다.</p>
+     */
+    public synchronized List<MatchEvent> pickUpItem(long connectionId, long playerId, int itemId, long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING) {
+            return List.of();
+        }
+        MatchPlayer taker = ownPlayer(connectionId, playerId);
+        if (taker == null) {
+            return List.of();
+        }
+        List<MatchEvent> events = new ArrayList<>();
+        // 타이머보다 먼저 왔으면 내려앉기·보호막 끝을 먼저 처리한다 (내려앉은 칸의 아이템은 거기서 줍는다)
+        endItemEffectsIfDue(taker, now, events);
+        FieldItem item = items.get(itemId);
+        if (item == null || taker.state() != MatchPlayer.State.ALIVE || taker.isAirborne(now)
+                || !taker.cell().equals(item.cell())) {
+            return events;
+        }
+        events.add(take(taker, item));
+        return events;
+    }
+
+    /** 아이템을 맵에서 치우고 먹인 뒤(액티브는 손에 든다), 방 전체에 보낼 ITEM_TAKEN을 만든다 */
+    private MatchEvent take(MatchPlayer taker, FieldItem item) {
+        items.remove(item.itemId());
+        taker.takeItem(item.type());
+        Stats stats = new Stats(taker.balloonCapacity(), taker.waterRange(), taker.speedLevel());
+        return toAll(MatchMessages.ITEM_TAKEN, new ItemTaken(item.itemId(), taker.playerId(), item.type().id(), stats,
+                heldId(taker), taker.heldCount()));
+    }
+
+    /** 손에 든 액티브 아이템의 id. 빈손이면 null */
+    private static String heldId(MatchPlayer player) {
+        return player.heldItem() == null ? null : player.heldItem().id();
+    }
+
+    /** 살아 있는 사람이 선 칸에 아이템이 있으면 줍는다. 갇혔다가 풀리거나 내려앉아 칸에 "들어가지" 않고 서게 됐을 때 부른다 */
+    private void pickUpUnderfoot(MatchPlayer player, List<MatchEvent> events) {
+        FieldItem underfoot = itemAt(player.cell());
+        if (player.state() == MatchPlayer.State.ALIVE && underfoot != null) {
+            events.add(take(player, underfoot));
+        }
+    }
+
+    /**
+     * ITEM_USE. 손에 든 액티브 아이템을 쓴다. 쓰면 효과를 적용하고 방 전체에 ITEM_USED를 보낸다.
+     * 손에 든 것과 다르거나 지금 쓸 수 없으면 조용히 버린다 (Notion 명세: 에러 코드 없음). 아이템은 그대로 남는다.
+     * 조건과 효과는 클라이언트 {@code ItemActions.useItem}과 같다.
+     *
+     * <ul>
+     *   <li>바늘: 갇혀 있을 때만. 구출처럼 {@link #ESCAPE_MS} 동안 빠져나오고, save는 아무도 얻지 않는다.
+     *       갇힌 채 아이템 칸에 서 있었으면 ITEM_USED 바로 뒤에 그 아이템을 줍는다.</li>
+     *   <li>보호막: 땅에 선 보통 상태이고 이미 쓰는 중이 아닐 때. {@link #SHIELD_MS} 동안 물줄기에 갇히지 않는다.</li>
+     *   <li>스프링 신발: 땅에 선 보통 상태일 때. 마지막 MOVE의 칸과 방향에서 {@link #JUMP_TILES}칸 앞 칸에 내려앉는다.
+     *       바로 앞 칸은 무엇이든 넘고, 내려앉을 칸이 맵 밖·막힌 칸이거나 물풍선이 있으면 쓰지 않는다.
+     *       {@link #JUMP_MS} 동안 공중에 있다 (물줄기에 맞지 않고, MOVE·물풍선·줍기를 받지 않는다).</li>
+     * </ul>
+     *
+     * <p>스프링 신발의 방향은 서버가 따로 셈하지 않는다 (클라이언트는 빠져나오기가 끝나면 아래를 보게 바꾼다).
+     * 그래서 클라이언트는 방향을 바꾼 뒤 ITEM_USE 전에 MOVE를 먼저 보내야 한다. 같은 연결의 메시지는 차례대로 처리된다.</p>
+     *
+     * @param item 쓰려는 아이템. 모르는 id라 null이어도 조용히 버린다
+     */
+    public synchronized List<MatchEvent> useItem(long connectionId, long playerId, ItemType item, long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING) {
+            return List.of();
+        }
+        MatchPlayer user = ownPlayer(connectionId, playerId);
+        if (user == null || item == null || !user.isInPlay()) {
+            return List.of();
+        }
+        List<MatchEvent> events = new ArrayList<>();
+        endItemEffectsIfDue(user, now, events);
+        if (user.heldItem() != item || !applyItem(user, item, now)) {
+            return events;
+        }
+        user.useHeldItem();
+        Long durationMs = switch (item) {
+            case SHIELD -> SHIELD_MS;
+            case SPRING_SHOE -> JUMP_MS;
+            default -> null;
+        };
+        Cell landing = item == ItemType.SPRING_SHOE ? user.cell() : null;
+        events.add(toAll(MatchMessages.ITEM_USED, new ItemUsed(user.playerId(), item.id(), durationMs,
+                landing == null ? null : landing.col(), landing == null ? null : landing.row(), heldId(user),
+                user.heldCount())));
+        if (item == ItemType.NEEDLE) {
+            // 클라이언트는 갇힌 동안 보낸 ITEM_PICKUP이 버려졌어도 그 칸에서 다시 보내지 않는다 (구출과 같다)
+            pickUpUnderfoot(user, events);
+        }
+        return events;
+    }
+
+    /** @return 지금 쓸 수 있어 효과를 적용했는지 */
+    private boolean applyItem(MatchPlayer user, ItemType item, long now) {
+        switch (item) {
+            case NEEDLE -> {
+                if (user.state() != MatchPlayer.State.TRAPPED || user.trappedUntil() <= now) {
+                    return false;
+                }
+                user.rescue(now + ESCAPE_MS);
+                return true;
+            }
+            case SHIELD -> {
+                if (!user.isFree(now) || user.isShielded(now)) {
+                    return false;
+                }
+                user.raiseShield(now + SHIELD_MS);
+                return true;
+            }
+            case SPRING_SHOE -> {
+                Cell landing = new Cell(user.cell().col() + user.facing().dx() * JUMP_TILES,
+                        user.cell().row() + user.facing().dy() * JUMP_TILES);
+                if (!user.isFree(now) || map.isSolid(landing.col(), landing.row()) || balloonAt(landing) != null) {
+                    return false;
+                }
+                user.jumpTo(landing, now + JUMP_MS);
+                return true;
+            }
+            default -> {
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 시간이 다 된 아이템 효과를 끝낸다. 타이머가 부르고, 타이머보다 먼저 온 그 사람의 입력(MOVE·BALLOON_PLACE·ITEM_PICKUP·
+     * ITEM_USE)도 처리하기 전에 부른다.
+     * 내려앉으면(클라이언트 PlayerGear.advance) 물줄기가 남은 칸이면 갇히고, 아니면 그 칸의 아이템을 줍는다
+     * (클라이언트는 내려앉은 칸에서 아이템을 바로 먹는다). 보호막이 끝난 순간 물줄기 위에 서 있으면 갇힌다.
+     * 물줄기는 처리하는 지금이 아니라 효과가 끝난 순간의 것으로 본다 (그 사이에 물줄기가 사라졌어도 클라이언트처럼 갇힌다).
+     */
+    private void endItemEffectsIfDue(MatchPlayer player, long now, List<MatchEvent> events) {
+        if (player.isLandingDue(now)) {
+            player.land();
+            trapIfWetAt(player, player.landsAt(), now, events);
+            pickUpUnderfoot(player, events);
+        }
+        if (player.isShieldDue(now)) {
+            player.lowerShield();
+            trapIfWetAt(player, player.shieldUntil(), now, events);
+        }
+    }
+
+    /**
+     * BOX_PUSH. 밀 수 있으면 서버 맵에서 상자를 한 칸 옮기고 방 전체에 BOX_MOVED를 보낸다. 밀 수 없으면 조용히 버린다.
+     *
+     * <p>밀 수 있는 조건은 클라이언트 {@code BoxPusher.push}와 같다.</p>
+     * <ul>
+     *   <li>미는 사람이 살아 있고 갇히지 않았고 빠져나오는 중도 아니다 (클라이언트 PlayerState.NORMAL).</li>
+     *   <li>마지막 MOVE가 멈춘 상태이고 direction 쪽을 보며, 그 칸(몸 가운데 칸)의 direction 쪽 바로 다음 칸이 (col, row)다.
+     *       클라이언트는 바로 앞 상자에 막혀 움직이지 못한 채 같은 쪽을 누르고 있을 때만 민다.</li>
+     *   <li>(col, row)가 밀리는 상자({@link Tile#isPushable}: 상자 P, 철로 보강된 상자 c·b·a)이고,
+     *       밀려 들어와 아직 미끄러지는 중({@link #SLIDE_MS})이 아니다. 보강된 상자는 남은 맞을 횟수째 옮겨진다.</li>
+     *   <li>밀려 갈 칸이 상자를 받을 수 있다 ({@link #canReceiveBox}).</li>
+     * </ul>
+     * <p>막힌 채 {@code BoxPusher.PUSH_SECONDS}(0.25초) 동안 눌렀는지는 다시 재지 않는다. MOVE는 바뀔 때만 오고 도착 간격이
+     * 통신 지연에 따라 흔들려서, 서버 시계로 재면 제대로 민 요청도 버릴 수 있다.</p>
+     *
+     * <p>맵 칸은 미는 순간 옮긴다. 클라이언트가 그림을 미끄러뜨리는 동안에도 상자는 이미 새 칸에 있으므로, 그 사이 터진 물줄기는
+     * 비워진 원래 칸을 지나가 새 칸의 상자를 맞힌다. 고정 드롭도 상자를 따라간다 ({@link GameMap#moveBlock}).</p>
+     */
+    public synchronized List<MatchEvent> pushBox(long connectionId, long playerId, int col, int row, Facing direction,
+                                                 long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING || direction == null) {
+            return List.of();
+        }
+        MatchPlayer pusher = ownPlayer(connectionId, playerId);
+        Cell box = new Cell(col, row);
+        Long slidesUntil = slidingUntil.get(box);
+        if (pusher == null || !pusher.isFree(now) || pusher.moving() || pusher.facing() != direction
+                || !pusher.cell().equals(new Cell(col - direction.dx(), row - direction.dy()))
+                || !map.isInside(col, row) || !map.tileAt(col, row).isPushable()
+                || (slidesUntil != null && now < slidesUntil)) {
+            return List.of();
+        }
+        Cell to = new Cell(col + direction.dx(), row + direction.dy());
+        if (!canReceiveBox(to, now)) {
+            return List.of();
+        }
+        map.moveBlock(col, row, to.col(), to.row());
+        slidingUntil.values().removeIf(until -> until <= now);
+        slidingUntil.put(to, now + SLIDE_MS);
+        return List.of(toAll(MatchMessages.BOX_MOVED, new BoxMoved(col, row, to.col(), to.row())));
+    }
+
+    /**
+     * 밀린 상자를 받을 수 있는 칸인지 (클라이언트 BoxPusher.canReceive와 GameWorld.BOX_BLOCKERS).
+     * 맵 안의 바닥 타일이어야 하고(블럭·덤불·집 등이 없음), 물풍선·아이템·물줄기와 몸이 조금이라도 걸친 사람이 없어야 한다.
+     * 쓰러지는 연출 중인 사람도 막는다. 물줄기가 남은 칸에 들어간 상자는 바로 부서질 수 있는데,
+     * 거기서 나온 아이템이 그 물줄기에 바로 사라지므로 밀지 않는다.
+     * 스프링 신발로 내려앉을 칸도 막는다 (클라이언트 CellOccupancy.Occupant.JUMP_LANDING). 서버는 뛰는 순간 위치를
+     * 내려앉을 칸 가운데로 옮기므로({@link MatchPlayer#jumpTo}) 아래 몸 검사가 그 칸을 막는다.
+     */
+    private boolean canReceiveBox(Cell cell, long now) {
+        if (!map.isInside(cell.col(), cell.row()) || !map.tileAt(cell.col(), cell.row()).isGround()
+                || balloonAt(cell) != null || itemAt(cell) != null || flameAt(cell, now) != null) {
+            return false;
+        }
+        for (MatchPlayer player : players.values()) {
+            if (player.isOnMap(now) && player.overlaps(cell)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -234,6 +510,9 @@ public final class Match {
         afterLeaving(now, events);
     }
 
+    /**
+     * 나가거나 끊긴 사람이 먹은 아이템은 흩뿌리지 않고 함께 사라진다. 명세(PLAYER_POPPED·ITEM_SCATTERED)는 터질 때만 다룬다.
+     */
     private void removeConnection(long connectionId, String reason, boolean notifyLeaver, List<MatchEvent> events) {
         List<Long> recipients = List.copyOf(connections);
         connections.remove(connectionId);
@@ -258,6 +537,9 @@ public final class Match {
             phase = Phase.FINISHED;
             balloons.clear();
             flames.clear();
+            items.clear();
+            airplanes.clear();
+            falling.clear();
             return;
         }
         // 한 팀만 남았으면 로딩 중이어도 ROUND_BEGIN 없이 바로 끝낸다
@@ -265,7 +547,10 @@ public final class Match {
         beginRoundIfAllLoaded(now, events);
     }
 
-    /** 타이머가 자주(수십 ms마다) 부른다. 로딩 시간 초과, 카운트다운 끝, 물풍선 폭발, 갇힘 시간 초과, 제한 시간을 처리한다 */
+    /**
+     * 타이머가 자주(수십 ms마다) 부른다. 로딩 시간 초과, 카운트다운 끝, 물풍선 폭발, 아이템 효과 끝(내려앉기·보호막),
+     * 갇힘 시간 초과, 제한 시간을 처리한다
+     */
     public synchronized List<MatchEvent> tick(long now) {
         List<MatchEvent> events = new ArrayList<>();
         switch (phase) {
@@ -277,16 +562,23 @@ public final class Match {
             case COUNTDOWN -> startPlayIfDue(now);
             case PLAYING -> {
                 explodeDueBalloons(now, events);
+                // 클라이언트 한 틱과 같은 차례: 내려앉은 자리를 이번 폭발이 덮으면 아이템이 먼저 사라지고 갇힌다
+                for (MatchPlayer player : players.values()) {
+                    endItemEffectsIfDue(player, now, events);
+                }
                 flames.removeIf(flame -> flame.until() <= now);
                 settleTouches(now, events);
                 for (MatchPlayer player : players.values()) {
                     if (player.state() == MatchPlayer.State.TRAPPED && player.trappedUntil() <= now) {
-                        pop(player, null, events);
+                        pop(player, null, now, events);
                     }
                 }
                 finishIfDecided(events);
                 if (phase == Phase.PLAYING && now >= endsAt) {
                     finish("TIME_UP", events);
+                }
+                if (phase == Phase.PLAYING) {
+                    flyAirplanes(now, events);
                 }
             }
             case FINISHED -> {
@@ -321,6 +613,8 @@ public final class Match {
      * <p>한 번에 터지는 물풍선은 모두 같은 순간 터진 것으로 본다. 그래서 줄기를 다 정할 때까지 물풍선을 맵에서 빼지 않고,
      * 어느 줄기든 물풍선이 있는 칸(이번에 함께 터지는 것 포함) 앞에서 멈춘다. 그러면 놓은 순서와 상관없이 결과가 같다.</p>
      *
+     * <p>아이템은 클라이언트 GameWorld와 같은 순서로 다룬다. 블럭을 맞히고, 다 부서진 블럭 자리에 아이템을 놓고,
+     * 물줄기가 덮은 칸의 아이템을 없앤다. 블럭 자리는 물줄기가 들어가지 않은 칸이라 방금 나온 아이템은 남는다.</p>
      */
     private void explodeDueBalloons(long now, List<MatchEvent> events) {
         Deque<Balloon> queue = new ArrayDeque<>();
@@ -336,6 +630,7 @@ public final class Match {
 
         List<ExplodedBalloon> exploded = new ArrayList<>();
         Set<Cell> hitBlocks = new LinkedHashSet<>();
+        Set<Cell> wetCells = new LinkedHashSet<>();
         while (!queue.isEmpty()) {
             Balloon balloon = queue.poll();
             Set<Cell> covered = new LinkedHashSet<>();
@@ -364,6 +659,7 @@ public final class Match {
                 }
             }
             flames.add(new Flame(balloon.balloonId(), balloon.cell(), covered, now + FLAME_MS));
+            wetCells.addAll(covered);
             MatchPlayer owner = players.get(balloon.ownerId());
             if (owner != null) {
                 owner.balloonGone();
@@ -376,27 +672,42 @@ public final class Match {
 
         // 블럭은 모든 물줄기를 정한 뒤 한 번씩만 맞힌다 (두 물줄기가 같은 블럭에 닿아도 한 번)
         List<ChangedTile> tiles = new ArrayList<>();
+        List<DroppedItem> dropped = new ArrayList<>();
         for (Cell cell : hitBlocks) {
             if (map.hitBlock(cell.col(), cell.row())) {
-                tiles.add(new ChangedTile(cell.col(), cell.row(),
-                        String.valueOf(map.tileAt(cell.col(), cell.row()).symbol())));
+                Tile after = map.tileAt(cell.col(), cell.row());
+                tiles.add(new ChangedTile(cell.col(), cell.row(), String.valueOf(after.symbol())));
+                if (after.isGround()) {
+                    dropFromBrokenBlock(cell).ifPresent(dropped::add);
+                }
             }
         }
-        // 아이템 API를 만들기 전까지 items·removedItems는 늘 비어 있다.
-        // 그때 다 부서진(바닥이 드러난) 블럭은 map.fixedDrop(...)이 있으면 그 아이템을, 없으면 확률로 정한 아이템을 떨어뜨린다
-        events.add(toAll(MatchMessages.BALLOON_EXPLODED, new BalloonExploded(exploded, tiles, List.of(), List.of())));
+        List<Integer> removed = new ArrayList<>();
+        items.values().removeIf(item -> {
+            boolean wet = wetCells.contains(item.cell());
+            if (wet) {
+                removed.add(item.itemId());
+            }
+            return wet;
+        });
+        events.add(toAll(MatchMessages.BALLOON_EXPLODED, new BalloonExploded(exploded, tiles, dropped, removed)));
 
         for (MatchPlayer player : players.values()) {
             trapIfWet(player, now, events);
         }
     }
 
-    /** 살아 있고 빠져나오는 중이 아닌 사람이 물줄기 칸에 있으면 가둔다 */
+    /** 땅에 선 보통 상태이고 보호막을 쓰는 중이 아닌 사람이 물줄기 칸에 있으면 가둔다 */
     private void trapIfWet(MatchPlayer player, long now, List<MatchEvent> events) {
-        if (!player.isFree(now)) {
+        trapIfWetAt(player, now, now, events);
+    }
+
+    /** {@link #trapIfWet}을 at 시각의 상태·물줄기로 판정하고, 갇히면 now부터 갇힌다 */
+    private void trapIfWetAt(MatchPlayer player, long at, long now, List<MatchEvent> events) {
+        if (!player.isFree(at) || player.isShielded(at)) {
             return;
         }
-        Flame flame = flameAt(player.cell(), now);
+        Flame flame = flameAt(player.cell(), at);
         if (flame == null) {
             return;
         }
@@ -423,7 +734,7 @@ public final class Match {
             MatchPlayer killer = nearest(trapped,
                     touching.stream().filter(other -> other.team() != trapped.team()).toList());
             if (killer != null) {
-                pop(trapped, killer, events);
+                pop(trapped, killer, now, events);
                 continue;
             }
             MatchPlayer saver = nearest(trapped, touching);
@@ -431,14 +742,21 @@ public final class Match {
                 trapped.rescue(now + ESCAPE_MS);
                 saver.addSave();
                 events.add(toAll(MatchMessages.PLAYER_RESCUED, new PlayerRescued(trapped.playerId(), saver.playerId())));
+                // 갇힌 채 아이템 칸에 들어가 서 있었다면 지금 줍는다. 갇힌 동안은 ITEM_PICKUP을 버리고,
+                // 클라이언트는 칸에 들어설 때 한 번만 보내므로 구출된 자리에서는 다시 보내지 않는다
+                pickUpUnderfoot(trapped, events);
             }
         }
     }
 
     private static MatchPlayer nearest(MatchPlayer trapped, List<MatchPlayer> candidates) {
+        return nearestTo(trapped.x(), trapped.y(), candidates);
+    }
+
+    /** candidates 가운데 중심이 (x, y)에 가장 가까운 사람. 거리가 같으면 playerId가 작은 사람. 없으면 null */
+    private static MatchPlayer nearestTo(double x, double y, List<MatchPlayer> candidates) {
         return candidates.stream()
-                .min(Comparator.comparingDouble(
-                                (MatchPlayer other) -> Math.hypot(other.x() - trapped.x(), other.y() - trapped.y()))
+                .min(Comparator.comparingDouble((MatchPlayer other) -> Math.hypot(other.x() - x, other.y() - y))
                         .thenComparingLong(MatchPlayer::playerId))
                 .orElse(null);
     }
@@ -447,14 +765,95 @@ public final class Match {
         return Math.abs(a.x() - b.x()) < TOUCH_DISTANCE && Math.abs(a.y() - b.y()) < TOUCH_DISTANCE;
     }
 
-    /** @param killer 닿아서 터뜨린 사람. 시간이 지나 터졌으면 null */
-    private void pop(MatchPlayer player, MatchPlayer killer, List<MatchEvent> events) {
-        player.pop();
+    /**
+     * 터뜨린다. PLAYER_POPPED 바로 뒤에 먹은 아이템을 흩뿌리고, 하나라도 놓였으면 ITEM_SCATTERED를 보낸다
+     * (놓을 칸이 하나도 없으면 보내지 않는다). 손에 든 액티브 아이템은 흩뿌리지 않고 사라진다.
+     *
+     * @param killer 닿아서 터뜨린 사람. 시간이 지나 터졌으면 null
+     */
+    private void pop(MatchPlayer player, MatchPlayer killer, long now, List<MatchEvent> events) {
+        Cell poppedAt = player.cell();
+        player.pop(now + DYING_MS);
         if (killer != null) {
             killer.addKill();
         }
         events.add(toAll(MatchMessages.PLAYER_POPPED, new PlayerPopped(player.playerId(),
                 killer == null ? null : killer.playerId(), killer == null ? "TIMEOUT" : "TOUCH")));
+        List<DroppedItem> scattered = scatter(player.handOverTakenItems(), now);
+        if (!scattered.isEmpty()) {
+            events.add(toAll(MatchMessages.ITEM_SCATTERED,
+                    new ItemScattered(player.playerId(), poppedAt.col(), poppedAt.row(), scattered)));
+        }
+    }
+
+    /**
+     * 터진 사람이 먹은 아이템을 맵 전체의 빈 풀밭에 무작위로 흩뿌린다.
+     *
+     * <p>규칙은 실제 크레이지 아케이드(빌리지 개인전) 영상에서 사망 두 건, 아이템 15개를 프레임 단위로 보고 정했다.</p>
+     * <ul>
+     *   <li>떨어진 칸은 죽은 칸에서 맨해튼 거리 1~14칸으로 맵 전체에 가까운 칸·먼 칸이 섞여 있었다
+     *       → 맵 전체 후보에서 중복 없이 균등하게 고른다. 죽은 칸 주변을 비우는 반경도 없다.</li>
+     *   <li>15개 모두 풀밭에 떨어졌고 도로·횡단보도에는 하나도 없었다 (균등 랜덤이었다면 약 0.5%)
+     *       → 후보는 일반 바닥({@link Tile#FLOOR})만이다. 집·나무·블럭·덤불, 물풍선·아이템이 있는 칸은 뺀다.</li>
+     *   <li>집·나무를 넘어 도로 건너편까지도, 바로 옆 칸에도 떨어졌다. 사방이 막힌 곳에서 죽은 장면은 찾지 못했다
+     *       → 막힌 곳 안에만(또는 밖에만) 뿌릴 근거가 없으므로, 갇혔는지·길이 이어져 있는지는 보지 않는다.</li>
+     *   <li>처음 먹은 롤러 셋이 거리순 1·5·6등이었다 (오래전 것이 가까이도, 멀리도 아님)
+     *       → 먹은 순서와 떨어지는 거리는 관계없다. 섞은 후보 칸과 짝지으므로 이미 그렇고, 아이템 목록도 섞어
+     *       후보가 모자랄 때 사라지는 아이템까지 먹은 순서와 관계없게 한다.</li>
+     * </ul>
+     * <p>물줄기가 남은 칸도 뺀다. 클라이언트는 물줄기 칸의 아이템을 바로 지우므로(GameWorld) 놓으면 화면과 어긋난다.
+     * 경기 중인 사람(살아 있거나 갇힌 사람)이 서 있는 칸도 뺀다. 클라이언트는 아이템 칸에 들어설 때 한 번만 ITEM_PICKUP을
+     * 보내므로, 발밑에 떨어진 아이템은 그 사람이 칸을 떠났다 돌아오기 전까지 아무도 줍지 못하고 남는다.
+     * 후보가 모자라면 놓을 수 있는 만큼만 놓고 나머지는 사라진다.</p>
+     *
+     * @return 놓인 아이템. 흩뿌릴 아이템이나 후보 칸이 없으면 비어 있다
+     */
+    private List<DroppedItem> scatter(List<ItemType> taken, long now) {
+        if (taken.isEmpty()) {
+            return List.of();
+        }
+        Set<Cell> occupied = new HashSet<>();
+        for (MatchPlayer player : players.values()) {
+            if (player.state() == MatchPlayer.State.ALIVE || player.state() == MatchPlayer.State.TRAPPED) {
+                occupied.add(player.cell());
+            }
+        }
+        List<Cell> candidates = new ArrayList<>();
+        for (int row = 0; row < map.rows(); row++) {
+            for (int col = 0; col < map.columns(); col++) {
+                Cell cell = new Cell(col, row);
+                if (map.tileAt(col, row) == Tile.FLOOR && balloonAt(cell) == null && itemAt(cell) == null
+                        && flameAt(cell, now) == null && !occupied.contains(cell)) {
+                    candidates.add(cell);
+                }
+            }
+        }
+        List<ItemType> shuffled = new ArrayList<>(taken);
+        Collections.shuffle(shuffled, random);
+        Collections.shuffle(candidates, random);
+        int count = Math.min(shuffled.size(), candidates.size());
+        List<DroppedItem> placed = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            placed.add(placeItem(candidates.get(i), shuffled.get(i)));
+        }
+        return placed;
+    }
+
+    /**
+     * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 비율표로 정한다.
+     * 나올 확률은 경기 인원에 맞춘다 ({@link ItemDrops#dropChanceFor}). 고정 드롭에는 난수를 쓰지 않는다.
+     * 액티브 아이템(바늘·보호막·스프링 신발)도 패시브와 똑같이 놓는다.
+     */
+    private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
+        return map.takeFixedDrop(cell.col(), cell.row())
+                .or(() -> ItemDrops.roll(random, playerCount))
+                .map(item -> placeItem(cell, item));
+    }
+
+    private DroppedItem placeItem(Cell cell, ItemType type) {
+        FieldItem item = new FieldItem(++lastItemId, type, cell);
+        items.put(item.itemId(), item);
+        return new DroppedItem(item.itemId(), cell.col(), cell.row(), type.id());
     }
 
     /** 남은 팀이 하나 이하면 경기를 끝낸다. 한 번에 여럿이 터진 뒤 부르므로, 마지막 사람들이 함께 터지면 ALL_DOWN이다 */
@@ -502,7 +901,123 @@ public final class Match {
         phase = Phase.FINISHED;
         balloons.clear();
         flames.clear();
+        items.clear();
+        airplanes.clear();
+        falling.clear();
         events.add(toAll(MatchMessages.GAME_OVER, new GameOver(reason, standings)));
+    }
+
+    /**
+     * 남은 시간이 출현 시각이 된 비행기를 띄우고, 날고 있는 비행기가 지나친 칸에 아이템을 떨어뜨리고,
+     * 떨어지던 아이템이 칸에 닿으면 그 칸에 선 사람에게 먹인다.
+     * PLAYING일 때만 부른다. 경기가 끝나면 새로 나오지도, 떨어뜨리지도 않는다 (클라이언트 {@code AirDrop}과 같다).
+     * 출현 시각보다 {@link AirDrop#LATE_SKIP_MS} 이상 늦은 tick이면 그 비행기는 건너뛴다.
+     */
+    private void flyAirplanes(long now, List<MatchEvent> events) {
+        List<Long> appearances = AirDrop.APPEARANCES_MS;
+        while (nextAppearance < appearances.size() && endsAt - now <= appearances.get(nextAppearance)) {
+            long appearAt = endsAt - appearances.get(nextAppearance);
+            nextAppearance++;
+            if (now - appearAt < AirDrop.LATE_SKIP_MS) {
+                launchAirplane(now, events);
+            }
+        }
+        for (Iterator<Airplane> it = airplanes.iterator(); it.hasNext(); ) {
+            Airplane airplane = it.next();
+            while (!airplane.ahead.isEmpty() && airplane.ahead.peek().passAt() <= now) {
+                release(airplane.airplaneId, airplane.ahead.poll().drop(), now, events);
+            }
+            if (airplane.ahead.isEmpty()) {
+                it.remove();
+            }
+        }
+        landFallingDrops(now, events);
+    }
+
+    /** 비행기를 띄운다. 떨어뜨릴 칸은 지금 맵으로 고르고({@link AirDrop#plan}), 지나가는 순서로 줄 세운다 */
+    private void launchAirplane(long now, List<MatchEvent> events) {
+        int airplaneId = ++lastAirplaneId;
+        Facing heading = AirDrop.headingOf(airplaneId - 1);
+        List<PassingDrop> drops = new ArrayList<>();
+        for (AirDrop.Drop drop : airDrop.plan()) {
+            drops.add(new PassingDrop(drop, now + AirDrop.passMs(map, heading, drop.col())));
+        }
+        drops.sort(Comparator.comparingLong(PassingDrop::passAt));
+        airplanes.add(new Airplane(airplaneId, new ArrayDeque<>(drops)));
+        events.add(toAll(MatchMessages.AIRPLANE_APPEARED, new AirplaneAppeared(airplaneId, heading.name())));
+    }
+
+    /**
+     * 비행기가 drop 칸의 열을 지나는 순간. 칸이 비어 있으면 아이템을 놓고 ITEM_DROPPED로 알린다.
+     * 서버는 이때부터 아이템이 맵에 있다고 본다. 클라이언트는 fallMs 동안 떨어지는 모습을 보여 준 뒤 놓는다.
+     * 칸에 닿는 시각(지금 + fallMs)을 적어 두었다가 {@link #landFallingDrops}가 그 칸에 선 사람에게 먹인다.
+     */
+    private void release(int airplaneId, AirDrop.Drop drop, long now, List<MatchEvent> events) {
+        Cell cell = new Cell(drop.col(), drop.row());
+        if (!canDropAt(cell, now)) {
+            return;
+        }
+        DroppedItem placed = placeItem(cell, drop.item());
+        long fallMs = AirDrop.fallMs(cell.row());
+        falling.add(new FallingDrop(placed.itemId(), now + fallMs));
+        events.add(toAll(MatchMessages.ITEM_DROPPED, new ItemDropped(airplaneId, placed.itemId(), placed.col(),
+                placed.row(), placed.item(), fallMs)));
+    }
+
+    /**
+     * 비행기가 지나가는 순간 이 칸에 떨어뜨릴 수 있는지. 지나간 시각이 아니라 그 뒤 처음 처리하는 tick 시각(now)의 칸을 본다
+     * (tick이 수십 ms마다라 많아야 한 tick 차이다). 아래 중 하나라도 있으면 떨어뜨리지 않는다 (덤불 칸은 떨어뜨린다).
+     * <ul>
+     *   <li>막힌 칸 (블럭·집 등 지나갈 수 없는 칸, 맵 바깥)</li>
+     *   <li>물풍선, 이미 놓인 아이템</li>
+     *   <li>물줄기가 남은 칸. 클라이언트는 물줄기 칸의 아이템을 바로 지운다</li>
+     * </ul>
+     * <p>사람은 막지 않는다. 사람이 서 있어도 떨어뜨리고, 아이템이 닿는 순간 그 칸에 선 사람이 바로 먹는다
+     * ({@link #landFallingDrops}).</p>
+     */
+    private boolean canDropAt(Cell cell, long now) {
+        return !map.isSolid(cell.col(), cell.row()) && balloonAt(cell) == null && itemAt(cell) == null
+                && flameAt(cell, now) == null;
+    }
+
+    /**
+     * 칸에 닿을 때가 된 아이템을 그 칸에 선 사람에게 바로 먹이고 ITEM_TAKEN을 보낸다. 클라이언트의 ITEM_PICKUP을 기다리지 않는다.
+     * <ul>
+     *   <li>선 사람: 충돌 박스 중심이 그 칸이고 살아 있으며 공중에 있지 않은 사람 (ITEM_PICKUP과 같은 기준).
+     *       갇힌 사람은 구해질 때, 스프링 신발로 뛰는 중인 사람은 내려앉을 때 발밑 아이템으로 먹는다.
+     *       여럿이면 칸 가운데에 가장 가까운 사람, 거리가 같으면 playerId가 작은 사람이다.</li>
+     *   <li>떨어지는 동안 이미 주웠거나 물줄기에 사라진 아이템은 아무 일도 없다.</li>
+     *   <li>닿을 때 아무도 없으면 그대로 맵에 남고, 그 뒤 들어오는 사람이 ITEM_PICKUP으로 줍는다. 클라이언트 화면에서는
+     *       통신 지연만큼 늦게 닿으므로, 그 사이 들어온 사람의 클라이언트는 닿을 때 ITEM_PICKUP을 보낸다.</li>
+     * </ul>
+     * <p>tick 안에서 폭발·갇힘을 처리한 뒤에 본다. tick이 늦어 닿는 시각과 터지는 시각이 한 tick 안에 겹치면
+     * 물줄기를 먼저 본다 (떨어뜨리기와 마찬가지로 tick 시각 기준이다).</p>
+     */
+    private void landFallingDrops(long now, List<MatchEvent> events) {
+        for (Iterator<FallingDrop> it = falling.iterator(); it.hasNext(); ) {
+            FallingDrop drop = it.next();
+            if (drop.landsAt() > now) {
+                continue;
+            }
+            it.remove();
+            FieldItem item = items.get(drop.itemId());
+            if (item == null) {
+                continue;
+            }
+            MatchPlayer taker = standingOn(item.cell(), now);
+            if (taker != null) {
+                events.add(take(taker, item));
+            }
+        }
+    }
+
+    /** 충돌 박스 중심이 cell에 있고 살아 있으며 공중에 있지 않은 사람 가운데 칸 가운데에 가장 가까운 사람. 없으면 null */
+    private MatchPlayer standingOn(Cell cell, long now) {
+        List<MatchPlayer> standing = players.values().stream()
+                .filter(player -> player.state() == MatchPlayer.State.ALIVE && !player.isAirborne(now)
+                        && player.cell().equals(cell))
+                .toList();
+        return nearestTo(GameMap.centerX(cell.col()), GameMap.centerY(cell.row()), standing);
     }
 
     /** 이 연결의 플레이어. 다른 연결의 playerId면 null */
@@ -515,6 +1030,15 @@ public final class Match {
         for (Balloon balloon : balloons) {
             if (balloon.cell().equals(cell)) {
                 return balloon;
+            }
+        }
+        return null;
+    }
+
+    private FieldItem itemAt(Cell cell) {
+        for (FieldItem item : items.values()) {
+            if (item.cell().equals(cell)) {
+                return item;
             }
         }
         return null;
@@ -551,5 +1075,30 @@ public final class Match {
 
     /** 터진 물풍선이 남긴 물줄기 */
     private record Flame(int balloonId, Cell center, Set<Cell> cells, long until) {
+    }
+
+    /** 맵 바닥에 놓인 아이템 */
+    private record FieldItem(int itemId, ItemType type, Cell cell) {
+    }
+
+    /** 날고 있는 비행기 */
+    private static final class Airplane {
+
+        private final int airplaneId;
+        /** 아직 지나가지 않은 칸. 지나가는 순서다 */
+        private final Deque<PassingDrop> ahead;
+
+        Airplane(int airplaneId, Deque<PassingDrop> ahead) {
+            this.airplaneId = airplaneId;
+            this.ahead = ahead;
+        }
+    }
+
+    /** 비행기가 떨어뜨리려는 칸과, 떨어뜨리는 자리가 그 열을 지나는 시각 */
+    private record PassingDrop(AirDrop.Drop drop, long passAt) {
+    }
+
+    /** 비행기에서 떨어지는 중인 아이템과 칸에 닿는 시각 */
+    private record FallingDrop(int itemId, long landsAt) {
     }
 }

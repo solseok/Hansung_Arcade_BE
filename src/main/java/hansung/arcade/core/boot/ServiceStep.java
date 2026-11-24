@@ -1,6 +1,9 @@
 package hansung.arcade.core.boot;
 
 import hansung.arcade.core.net.ConnectionListener;
+import hansung.arcade.domain.room.business.RoomService;
+import hansung.arcade.domain.room.web.controller.RoomConnections;
+import hansung.arcade.domain.room.web.controller.RoomListener;
 import hansung.arcade.core.server.ServerContext;
 import hansung.arcade.domain.game.business.GameService;
 import hansung.arcade.domain.game.web.controller.GameConnections;
@@ -18,11 +21,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 2단계: 계층을 아래에서부터 조립한다. repository → business → web.controller(연결 리스너).
- * 저장소를 H2·SQLite로 바꿀 때는 여기서 {@link PlayerRepository} 구현만 바꾼다.
- *
- * <p>경기 타이머 스레드({@code game-timer}) 하나가 {@value #TICK_MS}ms마다 모든 경기를 돌리고(물풍선 폭발, 갇힘 시간 등),
- * 끊긴 연결의 경기 정리도 맡는다.</p>
+ * 2단계: 세션·방·경기 서비스를 조립하고 경기 종료와 퇴장을 방 상태에 연결한다.
+ * 방과 경기의 끊김 정리는 같은 단일 스레드 executor에서 등록 순서대로 처리한다.
  */
 public final class ServiceStep implements BootStep {
 
@@ -59,6 +59,14 @@ public final class ServiceStep implements BootStep {
             }
         }, TICK_MS, TICK_MS, TimeUnit.MILLISECONDS);
 
+        RoomConnections roomConnections = new RoomConnections();
+        RoomService roomService = new RoomService(roomConnections, gameService, () -> System.nanoTime() / 1_000_000);
+        gameService.onFinished(match -> roomService.finishGame(match.matchId()));
+        gameService.onExit(roomService::exitGame);
+        gameService.onDropped(roomService::exitGame);
+        context.register(RoomConnections.class, roomConnections);
+        context.register(RoomService.class, roomService);
+        context.register(RoomListener.class, new RoomListener(roomService, gameTimer));
         context.register(GameService.class, gameService);
         context.register(GameConnections.class, gameConnections);
         context.register(GameListener.class, new GameListener(gameService, gameTimer));
