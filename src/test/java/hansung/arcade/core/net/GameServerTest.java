@@ -38,6 +38,11 @@ class GameServerTest {
         dispatcher.register("ROOM_JOIN", (connection, request) -> {
             throw new ProtocolException("ROOM_FULL", "자리가 없습니다.");
         });
+        dispatcher.register("SELF_REPLY", (connection, request) -> {
+            connection.send(Message.ok(request, Json.object().put("by", "handler")));
+            connection.send(Message.push("AFTER", null));
+            return MessageHandler.RESPONDED;
+        });
         dispatcher.register("BOOM", (connection, request) -> {
             throw new IllegalStateException("핸들러 버그");
         });
@@ -116,6 +121,22 @@ class GameServerTest {
             client.send("{\"type\":\"ECHO\",\"id\":1,\"body\":{\"text\":\"안녕\"}}");
 
             assertEquals("안녕", client.receive().at("/body/text").asText());
+        }
+    }
+
+    @Test
+    void 핸들러가_응답을_직접_보내고_RESPONDED를_돌려주면_응답을_다시_보내지_않는다() throws IOException {
+        try (Client client = new Client()) {
+            client.receive();
+            client.send("{\"type\":\"SELF_REPLY\",\"id\":3,\"body\":{}}");
+            client.send("{\"type\":\"PING\",\"id\":4,\"body\":{}}");
+
+            assertEquals("{\"type\":\"SELF_REPLY\",\"id\":3,\"ok\":true,\"body\":{\"by\":\"handler\"}}",
+                    client.receive().toString());
+            assertEquals("AFTER", client.receive().get("type").asText());
+            JsonNode next = client.receive();
+            assertEquals("PING", next.get("type").asText());
+            assertEquals(4, next.get("id").asInt());
         }
     }
 

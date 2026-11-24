@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
 import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
@@ -36,7 +37,7 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * <p>경기 하나의 판정과 푸시 보내기는 그 경기 lock 안에서 함께 한다. 그래서 받는 스레드(MOVE 등)와 타이머 스레드에서
  * 생긴 푸시가 판정 순서대로 나간다. {@link EventSender}는 송신 큐에 넣기만 하므로 lock을 오래 잡지 않는다.</p>
  *
- * <p>방 API가 아직 없으므로 경기는 {@link #start}로 직접 연다. 방을 만들면 GAME_START 처리에서 이것을 부르고,
+ * <p>방 서비스가 GAME_START에서 {@link #start}로 경기를 연다.
  * {@link #onFinished}로 경기가 끝난 방을 대기 상태로 돌린다.</p>
  */
 public final class GameService {
@@ -59,6 +60,10 @@ public final class GameService {
     private final AtomicLong lastMatchId = new AtomicLong();
     /** 끝났지만 아직 {@link #finishedListener}에 알리지 않은 경기 */
     private final Set<Match> pendingFinished = ConcurrentHashMap.newKeySet();
+    private volatile LongConsumer exitListener = id -> {
+    };
+    private volatile LongConsumer droppedListener = id -> {
+    };
     private volatile Consumer<Match> finishedListener = match -> {
     };
 
@@ -71,7 +76,17 @@ public final class GameService {
         this.random = Objects.requireNonNull(random);
     }
 
-    /** 경기가 끝나면(GAME_OVER를 보낸 뒤, 또는 모두 나가서) 불린다. 방 API가 방을 대기 상태로 돌릴 때 쓴다 */
+    /** 경기 존재 여부를 확인하기 전에 방 퇴장을 처리한다. */
+    public void onExit(LongConsumer listener) {
+        exitListener = Objects.requireNonNull(listener);
+    }
+
+    /** 로딩 초과로 빠진 연결의 방 정리를 경기 종료 알림보다 먼저 처리한다. */
+    public void onDropped(LongConsumer listener) {
+        droppedListener = Objects.requireNonNull(listener);
+    }
+
+    /** 경기가 끝나면(GAME_OVER를 보낸 뒤, 또는 모두 나가서) 불린다. 방 서비스가 방을 대기 상태로 돌릴 때 쓴다 */
     public void onFinished(Consumer<Match> listener) {
         this.finishedListener = Objects.requireNonNull(listener);
     }
@@ -94,8 +109,8 @@ public final class GameService {
             throw new IllegalArgumentException("지원하지 않는 맵입니다: " + mapId);
         }
         if (participants.size() > GameMaps.maxPlayers(actualMapId)) {
-            throw new IllegalArgumentException("%s 맵에는 %d명까지 들어갑니다.".formatted(actualMapId,
-                    GameMaps.maxPlayers(actualMapId)));
+            throw new IllegalArgumentException(
+                    "%s 맵에는 %d명까지 들어갑니다.".formatted(actualMapId, GameMaps.maxPlayers(actualMapId)));
         }
         GameMap map = MapLoader.load(actualMapId);
         if (participants.size() > map.spawns().size()) {
@@ -119,6 +134,8 @@ public final class GameService {
         Match match = new Match(lastMatchId.incrementAndGet(), map, players);
 
         Set<Long> connections = new HashSet<>(match.connectionIds());
+        Set<Long> disconnected = new HashSet<>();
+
         synchronized (match) {
             for (Long connectionId : connections) {
                 if (byConnection.putIfAbsent(connectionId, match) != null) {
@@ -126,13 +143,21 @@ public final class GameService {
                     throw new IllegalArgumentException("이미 경기 중인 연결입니다: #" + connectionId);
                 }
             }
+            try {
+                for (long id : connections) {
+                    if (!sender.isConnected(id)) { disconnected.add(id); }
+                }
+            } catch (RuntimeException e) {
+                connections.forEach(id -> byConnection.remove(id, match));
+                throw e;
+            }
             matches.add(match);
             log.info("경기 #{} 시작: {} {}명", match.matchId(), actualMapId, players.size());
             long now = clock.getAsLong();
             deliver(match, match.start(now));
             // 이미 끊긴 연결은 끊김 정리가 경기 등록보다 먼저 돌아 놓쳤을 수 있다. 로딩 시간 초과까지 기다리지 않고 바로 뺀다
             for (Long connectionId : connections) {
-                if (!sender.isConnected(connectionId)) {
+                if (disconnected.contains(connectionId)) {
                     deliver(match, match.leave(connectionId, "DISCONNECT", false, now));
                 }
             }
@@ -189,6 +214,11 @@ public final class GameService {
      * @throws GameException 경기 중이 아니면 WRONG_STATE. 확인한 직후 타이머가 경기를 끝낸 경우도 포함한다
      */
     public void exit(long connectionId) {
+        try {
+            exitListener.accept(connectionId);
+        } catch (RuntimeException e) {
+            log.error("#{} 게임 나가기의 방 정리 실패", connectionId, e);
+        }
         Match match = requireMatch(connectionId);
         synchronized (match) {
             if (!match.includes(connectionId)) {
@@ -215,12 +245,24 @@ public final class GameService {
     public void tick() {
         for (Match match : matches) {
             try {
+                List<Long> dropped;
                 synchronized (match) {
+                    List<Long> before = match.connectionIds();
                     deliver(match, match.tick(clock.getAsLong()));
+                    List<Long> after = match.connectionIds();
+                    dropped = before.stream().filter(id -> !after.contains(id)).toList();
                 }
-                notifyIfFinished(match);
+                for (long id : dropped) {
+                    try {
+                        droppedListener.accept(id);
+                    } catch (RuntimeException e) {
+                        log.error("#{} 로딩 초과 방 정리 실패", id, e);
+                    }
+                }
             } catch (RuntimeException e) {
                 log.error("경기 #{} 타이머 처리 중 오류", match.matchId(), e);
+            } finally {
+                notifyIfFinished(match);
             }
         }
     }

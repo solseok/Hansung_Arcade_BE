@@ -13,6 +13,8 @@ public final class CommonErrorCode {
     /** 지금 상태에서는 할 수 없는 요청 */
     public static final String WRONG_STATE = "WRONG_STATE";
 
+    public static final String NOT_HOST = "NOT_HOST";
+
     private CommonErrorCode() {
     }
 }
