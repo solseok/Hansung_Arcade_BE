@@ -294,19 +294,14 @@ public final class GameService {
     }
 
     /**
-     * 경기 lock 안에서 부른다. 푸시를 보내고, 경기에서 빠진 연결과 끝난 경기를 정리한다.
+     * 경기 lock 안에서 부른다. 경기에서 빠진 연결과 끝난 경기를 정리한 뒤 푸시를 보낸다.
+     * 정리를 먼저 해서, PLAYER_LEFT·GAME_OVER를 받은 클라이언트가 곧바로 보낸 요청도 이미 정리된 상태를 본다
+     * (보낸 뒤에 정리하면 송신 스레드가 먼저 내보낸 GAME_OVER와 정리 사이에 틈이 생긴다).
      *
      * <p>{@code Connection.send}는 송신 큐가 넘쳐도 끊김 리스너를 이 스레드에서 부르지 않는다. 그래서 경기 lock 안에서
      * 보내도 세션·방 lock을 잡지 않는다.</p>
      */
     private void deliver(Match match, List<MatchEvent> events) {
-        for (MatchEvent event : events) {
-            try {
-                sender.send(event);
-            } catch (RuntimeException e) {
-                log.error("경기 #{} {} 보내기 실패", match.matchId(), event.type(), e);
-            }
-        }
         List<Long> remaining = match.connectionIds();
         boolean finished = match.isFinished();
         byConnection.entrySet().removeIf(entry ->
@@ -314,6 +309,13 @@ public final class GameService {
         if (finished && matches.remove(match)) {
             log.info("경기 #{} 끝", match.matchId());
             pendingFinished.add(match);
+        }
+        for (MatchEvent event : events) {
+            try {
+                sender.send(event);
+            } catch (RuntimeException e) {
+                log.error("경기 #{} {} 보내기 실패", match.matchId(), event.type(), e);
+            }
         }
     }
 
