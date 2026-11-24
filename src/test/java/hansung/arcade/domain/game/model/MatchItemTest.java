@@ -144,6 +144,17 @@ class MatchItemTest {
     }
 
     @Test
+    void 나올_확률은_경기를_열_때의_인원으로_정한다() {
+        // 이 경기는 세 명이라 37%다. 첫 난수 0.36이면 2명 경기(33%)에서는 안 나오지만 여기서는 나온다
+        Match three = playing(new ScriptedRandom(0.36, 0.0));
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "bubble")), explodeAt(three, 5, PLAY).items());
+
+        // 0.37이면 세 명 경기에서도 안 나온다
+        Match boundary = playing(new ScriptedRandom(0.37));
+        assertEquals(List.of(), explodeAt(boundary, 5, PLAY).items());
+    }
+
+    @Test
     void 확률표에서_액티브가_나오면_아무것도_놓지_않는다() {
         // 나옴(0.0), 마지막 구간(0.99) = 스프링 신발
         Match match = playing(new ScriptedRandom(0.0, 0.99));

@@ -85,6 +85,8 @@ public final class Match {
     /** 아이템이 나올지·무엇인지, 흩뿌릴 칸을 정하는 난수 */
     private final RandomGenerator random;
 
+    /** 블럭이 다 부서졌을 때 아이템이 나올 확률. 경기를 열 때의 인원으로 정한다 ({@link ItemDrops#dropChanceFor}) */
+    private final double dropChance;
     private Phase phase = Phase.LOADING;
     private long loadDeadline;
     private long playStartsAt;
@@ -103,6 +105,7 @@ public final class Match {
         this.map = map;
         this.random = Objects.requireNonNull(random);
         for (MatchPlayer player : participants) {
+        this.dropChance = ItemDrops.dropChanceFor(participants.size());
             if (players.putIfAbsent(player.playerId(), player) != null) {
                 throw new IllegalArgumentException("playerId가 겹칩니다: " + player.playerId());
             }
@@ -576,7 +579,7 @@ public final class Match {
      */
     private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
         return map.takeFixedDrop(cell.col(), cell.row())
-                .or(() -> ItemDrops.roll(random))
+                .or(() -> ItemDrops.roll(random, dropChance))
                 .filter(item -> !item.isActive())
                 .map(item -> placeItem(cell, item));
     }
@@ -585,6 +588,7 @@ public final class Match {
     private DroppedItem placeItem(Cell cell, ItemType type) {
         if (type.isActive()) {
             throw new IllegalArgumentException("액티브 아이템은 아직 맵에 놓지 않습니다: " + type);
+     * 나올 확률은 경기 인원에 맞춘 {@link #dropChance}다.
         }
         FieldItem item = new FieldItem(++lastItemId, type, cell);
         items.put(item.itemId(), item);
