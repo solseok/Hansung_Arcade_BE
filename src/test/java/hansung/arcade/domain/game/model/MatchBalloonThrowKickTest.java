@@ -341,6 +341,62 @@ class MatchBalloonThrowKickTest {
     }
 
     @Test
+    void 퓨즈가_다_된_물풍선은_타이머보다_먼저_던져도_던지지_않고_그_자리에서_터진다() {
+        Match match = playing();
+        give(match, RED, ItemType.GLOVE);
+        placeAt(match, RED, 1, 0, PLAY);
+        stand(match, RED, 0, 0, Facing.RIGHT, PLAY);
+
+        List<MatchEvent> events = throwBalloon(match, RED, 1, 0, Facing.RIGHT, PLAY + Match.FUSE_MS + 5);
+
+        assertEquals(List.of(MatchMessages.BALLOON_EXPLODED, MatchMessages.PLAYER_TRAPPED), types(events));
+        assertEquals(List.of(new ExplodedBalloon(1, 1, 0, 0, 1, 1, 1)), exploded(events).balloons());
+    }
+
+    @Test
+    void 퓨즈가_다_된_물풍선은_타이머보다_먼저_차도_차지_않고_그_자리에서_터진다() {
+        Match match = playing();
+        give(match, RED, ItemType.SHOE);
+        placeAt(match, RED, 2, 0, PLAY);
+        stand(match, RED, 1, 0, Facing.RIGHT, PLAY);
+
+        List<MatchEvent> events = kick(match, RED, 2, 0, Facing.RIGHT, PLAY + Match.FUSE_MS + 5);
+
+        assertEquals(List.of(MatchMessages.BALLOON_EXPLODED, MatchMessages.PLAYER_TRAPPED), types(events));
+        assertEquals(List.of(new ExplodedBalloon(1, 2, 0, 0, 1, 1, 1)), exploded(events).balloons());
+    }
+
+    @Test
+    void 내려앉을_때가_된_물풍선은_타이머보다_먼저_와도_내려앉혀_다시_던진다() {
+        Match match = playing();
+        give(match, RED, ItemType.GLOVE);
+        placeAt(match, RED, 1, 0, PLAY);
+        stand(match, RED, 1, 0, Facing.RIGHT, PLAY);
+        assertEquals(1, throwBalloon(match, RED, 1, 0, Facing.RIGHT, PLAY).size());
+        stand(match, RED, 6, 0, Facing.RIGHT, PLAY + 365);
+
+        assertEquals(thrown(1, RED, 7, 0, 12, 0, Facing.RIGHT, 300), throwBalloon(match, RED, 7, 0, Facing.RIGHT, PLAY + 365));
+    }
+
+    @Test
+    void 가시_면으로_차서_바로_터질_때도_타이머가_아직_옮기지_않은_미끄러지는_물풍선을_지금_칸에서_맞힌다() {
+        Match match = playing();
+        give(match, RED, ItemType.SHOE);
+        give(match, BLUE, ItemType.SHOE);
+        placeAt(match, RED, 7, 6, PLAY);
+        stand(match, RED, 6, 6, Facing.RIGHT, PLAY);
+        placeAt(match, BLUE, 2, 5, PLAY);
+        stand(match, BLUE, 1, 5, Facing.RIGHT, PLAY);
+        // 파랑 물풍선은 0.45초에 (7,5)로 넘어간다. 그 뒤 타이머가 돌기 전에 빨강이 가시 면 앞 (7,6) 물풍선을 찬다
+        assertEquals(1, kick(match, BLUE, 2, 5, Facing.RIGHT, PLAY).size());
+
+        List<MatchEvent> events = kick(match, RED, 7, 6, Facing.RIGHT, PLAY + 460);
+
+        assertEquals(List.of(new ExplodedBalloon(1, 7, 6, 0, 1, 1, 0), new ExplodedBalloon(2, 7, 5, 1, 0, 1, 1)),
+                exploded(events).balloons());
+    }
+
+    @Test
     void 미끄러지거나_나는_물풍선은_던지거나_차지_못한다() {
         Match match = playing();
         give(match, RED, ItemType.GLOVE, ItemType.SHOE, ItemType.BUBBLE);

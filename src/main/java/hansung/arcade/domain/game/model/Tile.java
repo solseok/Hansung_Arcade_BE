@@ -100,7 +100,7 @@ public enum Tile {
      * (클라이언트 {@code Tile.popsBalloonMoving}). 예를 들어 {@link #ONE_WAY_LEFT}는 오른쪽으로 미끄러져 와 왼쪽 면에 닿은
      * 물풍선을 터뜨린다.
      */
-    public boolean popsBalloonMoving(Facing travel) {
+    boolean popsBalloonMoving(Facing travel) {
         Facing thorn = switch (this) {
             case ONE_WAY_LEFT -> Facing.LEFT;
             case ONE_WAY_RIGHT -> Facing.RIGHT;

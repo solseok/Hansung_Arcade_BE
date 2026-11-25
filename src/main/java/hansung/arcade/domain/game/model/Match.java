@@ -274,8 +274,7 @@ public final class Match {
                 col, row, balloon.range(), fuseMs)));
         if (wet) {
             // 갇힌 사람의 닿음 판정은 MIN_TRAPPED_MS 뒤에 한다
-            explodeDueBalloons(now, events);
-            finishIfDecided(events);
+            explodeNow(now, events);
         }
         return events;
     }
@@ -526,8 +525,14 @@ public final class Match {
             return List.of();
         }
         List<MatchEvent> events = new ArrayList<>();
-        // 타이머보다 먼저 왔으면 내려앉기·보호막 끝을 먼저 처리한다 (물줄기 위에 내려앉았으면 갇혀 던지지 못한다)
+        // 타이머보다 먼저 왔으면 그때까지의 물풍선 이동·폭발을 먼저 처리한다. 퓨즈가 다 된 물풍선은 던지지 않고 터지고,
+        // 내려앉을 때가 된 물풍선은 내려앉아 던질 수 있다 (클라이언트도 물풍선을 옮기고 터뜨린 뒤 물풍선 키를 본다)
+        explodeNow(now, events);
+        // 내려앉기·보호막 끝도 먼저 처리한다 (물줄기 위에 내려앉았으면 갇혀 던지지 못한다)
         endItemEffectsIfDue(thrower, now, events);
+        if (phase != Phase.PLAYING) {
+            return events;
+        }
         Cell from = new Cell(col, row);
         if (!thrower.isFree(now) || !thrower.canThrowBalloons() || thrower.facing() != direction
                 || !(from.equals(thrower.cell()) || from.equals(ahead(thrower.cell(), direction, 1)))) {
@@ -572,7 +577,12 @@ public final class Match {
             return List.of();
         }
         List<MatchEvent> events = new ArrayList<>();
+        // 던지기와 같다: 그때까지의 물풍선 이동·폭발과 내려앉기·보호막 끝을 먼저 처리한다
+        explodeNow(now, events);
         endItemEffectsIfDue(kicker, now, events);
+        if (phase != Phase.PLAYING) {
+            return events;
+        }
         Cell cell = new Cell(col, row);
         if (!kicker.isFree(now) || !kicker.canPushBalloons() || kicker.moving() || kicker.facing() != direction
                 || !cell.equals(ahead(kicker.cell(), direction, 1)) || kicker.overlaps(cell)) {
@@ -588,8 +598,7 @@ public final class Match {
                     col, row, direction.name())));
         } else if (facesThorn(cell, direction)) {
             balloon.burstBy(now);
-            explodeDueBalloons(now, events);
-            finishIfDecided(events);
+            explodeNow(now, events);
         }
         return events;
     }
@@ -725,8 +734,10 @@ public final class Match {
 
     /**
      * 던진 물풍선을 내려앉히고 찬 물풍선을 미끄러뜨린다. 지금까지 일어났어야 할 일(내려앉는 때, 칸 경계를 넘는 때, 칸 가운데에 오는 때)을
-     * 모든 물풍선에 걸쳐 일어난 시각 순서대로 하나씩 처리하고, 판정은 그 시각의 맵·물풍선·물줄기로 한다. 그래서 tick 간격과 상관없이
-     * 결과가 같다 (같은 시각이면 놓은 순서). 미끄러지는 물풍선은 퓨즈가 다 된 뒤의 일은 처리하지 않는다 (그 순간 있던 칸에서 터진다).
+     * 모든 물풍선에 걸쳐 일어난 시각 순서대로 하나씩 처리하고(같은 시각이면 놓은 순서), 판정은 그 시각의 맵·물풍선·물줄기로 한다.
+     * 그래서 물풍선끼리의 이동 순서는 tick 간격에 흔들리지 않는다. 다만 퓨즈로 터지는 것과 그 물줄기는 tick(또는 입력)을 처리하는
+     * 시각에 생기므로, 그 사이에 일어난 이동과의 앞뒤는 tick 한 번(수십 ms)만큼 어긋날 수 있다 (클라이언트도 틱 단위로 본다).
+     * 미끄러지는 물풍선은 퓨즈가 다 된 뒤의 일은 처리하지 않는다 (그 순간 있던 칸에서 터진다).
      * 그 자리에서 터져야 하면 퓨즈를 그 시각으로 당겨 두고, 바로 뒤 {@link #explodeDueBalloons}가 터뜨린다.
      */
     private void moveBalloons(long now, List<MatchEvent> events) {
@@ -758,6 +769,17 @@ public final class Match {
             return balloon.nextSlideAt();
         }
         return Long.MAX_VALUE;
+    }
+
+    /**
+     * 입력을 처리하는 지금(now)까지 일어났어야 할 물풍선 이동과 폭발을 처리하고 경기가 끝났는지 본다. tick과 같은 차례다.
+     * 입력 처리 중에 터뜨려야 할 때(물줄기 칸에 놓기, 가시 면으로 차기)와, 묵은 물풍선 상태로 던지기·차기를 판정하지 않으려 할 때 부른다.
+     * 이동을 먼저 처리하므로, 미끄러지는 물풍선이 아직 처리되지 않은 이전 칸에서 터지거나 나중에 생긴 물줄기를 보지 않는다.
+     */
+    private void explodeNow(long now, List<MatchEvent> events) {
+        moveBalloons(now, events);
+        explodeDueBalloons(now, events);
+        finishIfDecided(events);
     }
 
     /**
