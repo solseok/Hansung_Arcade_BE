@@ -93,7 +93,7 @@ class BootWiringTest {
     void 구동_단계가_방_API를_모두_등록한다() {
         MessageDispatcher dispatcher = context.get(MessageDispatcher.class);
         for (String type : List.of("ROOM_LIST", "ROOM_CREATE", "ROOM_JOIN", "ROOM_QUICK_JOIN", "ROOM_LEAVE", "READY",
-                "SELECT_CHARACTER", "SELECT_TEAM", "CHANGE_MAP", "CHAT", "GAME_START")) {
+                "SELECT_CHARACTER", "SELECT_TEAM", "CHANGE_MAP", "CHANGE_SLOT", "CHAT", "GAME_START")) {
             assertTrue(dispatcher.handles(type), type);
         }
         assertTrue(context.contains(RoomService.class));

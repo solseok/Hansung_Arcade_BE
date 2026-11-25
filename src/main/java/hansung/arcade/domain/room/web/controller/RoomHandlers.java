@@ -40,6 +40,13 @@ public final class RoomHandlers {
         dispatcher.register("ROOM_LEAVE", (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.leave(id, reply)));
         dispatcher.register("CHANGE_MAP",
                 (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.changeMap(id, string(b, "mapId"), reply)));
+        dispatcher.register("CHANGE_SLOT", (c, r) -> handle(c, r, (id, p, b, reply) -> {
+            int slot = integer(b, "slot");
+            if (!b.path("open").isBoolean()) {
+                throw bad("open은 true나 false여야 합니다.");
+            }
+            rooms.changeSlot(id, slot, b.get("open").booleanValue(), reply);
+        }));
         dispatcher.register("GAME_START", (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.startGame(id, reply)));
         dispatcher.register("SELECT_CHARACTER", (c, r) -> handle(c, r,
                 (id, p, b, reply) -> rooms.selectCharacter(id, optionalPlayerId(b), string(b, "character"))));
@@ -104,7 +111,7 @@ public final class RoomHandlers {
 
     private static String string(JsonNode body, String field) throws ProtocolException {
         if (!body.path(field).isTextual()) {
-            throw bad(field + (Set.of("title", "team").contains(field) ? "은" : "는") + " 문자열이어야 합니다.");
+            throw bad(field + topic(field) + " 문자열이어야 합니다.");
         }
         return body.get(field).textValue();
     }
@@ -124,9 +131,16 @@ public final class RoomHandlers {
     private static int integer(JsonNode body, String field) throws ProtocolException {
         JsonNode node = body.path(field);
         if (!node.isIntegralNumber() || !node.canConvertToInt()) {
-            throw bad(field + "는 정수여야 합니다.");
+            throw bad(field + topic(field) + " 정수여야 합니다.");
         }
         return node.intValue();
+    }
+
+    /**
+     * 필드 이름 뒤에 붙일 조사. 받침으로 끝나게 읽히는 이름(타이틀·팀·슬롯)은 "은", 나머지는 "는"이다.
+     */
+    private static String topic(String field) {
+        return Set.of("title", "team", "slot").contains(field) ? "은" : "는";
     }
 
     private static ProtocolException bad(String message) {

@@ -142,7 +142,7 @@ class RoomFlowTest {
     void 로그인_전에는_모든_방_메시지가_NOT_LOGGED_IN이다() throws IOException {
         try (Client client = new Client()) {
             for (String type : List.of("ROOM_LIST", "ROOM_CREATE", "ROOM_JOIN", "ROOM_QUICK_JOIN", "ROOM_LEAVE",
-                    "CHANGE_MAP", "GAME_START")) {
+                    "CHANGE_MAP", "CHANGE_SLOT", "GAME_START")) {
                 client.send("{\"type\":\"" + type + "\",\"id\":5,\"body\":{}}");
                 JsonNode response = client.next(type);
                 assertFalse(response.get("ok").asBoolean());
@@ -224,6 +224,12 @@ class RoomFlowTest {
                 client.send("{\"type\":\"CHANGE_MAP\",\"id\":5,\"body\":" + body + "}");
                 assertEquals("BAD_MESSAGE", client.next("CHANGE_MAP").at("/error/code").asText(), body);
             }
+            for (String body : List.of("{}", "{\"slot\":\"1\",\"open\":false}", "{\"slot\":1}",
+                    "{\"slot\":1,\"open\":\"false\"}", "{\"slot\":1.5,\"open\":true}", "{\"slot\":8,\"open\":true}",
+                    "{\"slot\":-1,\"open\":false}")) {
+                client.send("{\"type\":\"CHANGE_SLOT\",\"id\":6,\"body\":" + body + "}");
+                assertEquals("BAD_MESSAGE", client.next("CHANGE_SLOT").at("/error/code").asText(), body);
+            }
             String[][] pushes = {
                     {"READY", "{}"}, {"READY", "{\"ready\":\"true\"}"}, {"READY", "{\"ready\":1}"},
                     {"SELECT_CHARACTER", "{}"}, {"SELECT_CHARACTER", "{\"character\":1}"},
@@ -253,7 +259,9 @@ class RoomFlowTest {
             String[][] requests = {
                     {"ROOM_CREATE", "{\"capacity\":4}", "title은 문자열이어야 합니다."},
                     {"ROOM_CREATE", "{\"title\":\"a\",\"capacity\":\"4\"}", "capacity는 정수여야 합니다."},
-                    {"ROOM_JOIN", "{\"roomNumber\":\"1\"}", "roomNumber는 정수여야 합니다."}};
+                    {"ROOM_JOIN", "{\"roomNumber\":\"1\"}", "roomNumber는 정수여야 합니다."},
+                    {"CHANGE_SLOT", "{\"open\":true}", "slot은 정수여야 합니다."},
+                    {"CHANGE_SLOT", "{\"slot\":1}", "open은 true나 false여야 합니다."}};
             for (String[] request : requests) {
                 client.send("{\"type\":\"" + request[0] + "\",\"id\":2,\"body\":" + request[1] + "}");
                 assertEquals(request[2], client.next(request[0]).at("/error/message").asText());
@@ -273,6 +281,51 @@ class RoomFlowTest {
             for (String[] push : pushes) {
                 client.send("{\"type\":\"" + push[0] + "\",\"body\":" + push[1] + "}");
                 assertEquals(push[2], client.next("ERROR").at("/body/message").asText(), push[0]);
+            }
+        }
+    }
+
+    @Test
+    void 방장이_자리를_닫고_열면_정원이_바뀌어_방_전체와_로비에_알린다() throws IOException {
+        try (Client host = new Client("방장"); Client guest = new Client("손님")) {
+            host.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":3}}");
+            JsonNode created = host.next("ROOM_CREATE");
+            assertEquals("[3,4,5,6,7]", created.at("/body/room/closedSlots").toString());
+            guest.send("{\"type\":\"ROOM_JOIN\",\"id\":3,\"body\":{\"roomNumber\":1}}");
+            guest.receive("ROOM_JOIN");
+            guest.receive("CHAT_MESSAGE");
+            host.receive("CHAT_MESSAGE");
+            try (Client lobby = new Client("구경꾼"); Client late = new Client("늦은")) {
+                host.send("{\"type\":\"CHANGE_SLOT\",\"id\":4,\"body\":{\"slot\":2,\"open\":false}}");
+
+                JsonNode response = host.next("CHANGE_SLOT");
+                assertTrue(response.get("ok").asBoolean());
+                assertEquals(4, response.get("id").asInt());
+                JsonNode state = host.next("ROOM_STATE");
+                assertEquals("[2,3,4,5,6,7]", state.at("/body/room/closedSlots").toString());
+                assertEquals(2, state.at("/body/room/capacity").asInt());
+                assertEquals(state.get("body"), guest.next("ROOM_STATE").get("body"));
+                assertEquals(2, lobby.next("LOBBY_ROOMS").at("/body/rooms/0/capacity").asInt());
+
+                late.receive("LOBBY_ROOMS");
+                late.send("{\"type\":\"ROOM_JOIN\",\"id\":5,\"body\":{\"roomNumber\":1}}");
+                assertEquals("ROOM_FULL", late.next("ROOM_JOIN").at("/error/code").asText());
+
+                host.send("{\"type\":\"CHANGE_SLOT\",\"id\":6,\"body\":{\"slot\":1,\"open\":false}}");
+                JsonNode refused = host.next("CHANGE_SLOT");
+                assertFalse(refused.get("ok").asBoolean());
+                assertEquals("SLOT_OCCUPIED", refused.at("/error/code").asText());
+                assertEquals("사람이 있는 자리는 닫을 수 없습니다.", refused.at("/error/message").asText());
+
+                host.send("{\"type\":\"CHANGE_SLOT\",\"id\":7,\"body\":{\"slot\":6,\"open\":true}}");
+                assertTrue(host.next("CHANGE_SLOT").get("ok").asBoolean());
+                assertEquals("[2,3,4,5,7]", host.next("ROOM_STATE").at("/body/room/closedSlots").toString());
+                assertEquals(3, lobby.next("LOBBY_ROOMS").at("/body/rooms/0/capacity").asInt());
+                late.receive("LOBBY_ROOMS");
+                late.send("{\"type\":\"ROOM_JOIN\",\"id\":8,\"body\":{\"roomNumber\":1}}");
+                JsonNode joined = late.next("ROOM_JOIN");
+                assertTrue(joined.get("ok").asBoolean());
+                assertEquals(6, joined.at("/body/players/2/slot").asInt());
             }
         }
     }

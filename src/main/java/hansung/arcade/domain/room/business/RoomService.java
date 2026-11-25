@@ -237,6 +237,37 @@ public final class RoomService {
         }
     }
 
+    /**
+     * 방장이 빈 자리를 열거나 닫는다. 바뀌면 정원이 함께 바뀌므로 방 전체와 로비에 알린다.
+     */
+    public void changeSlot(long connection, int slot, boolean open, Consumer<Object> reply) {
+        synchronized (lock) {
+            Room room = waiting(connection, "대기실에서만 자리를 열고 닫을 수 있습니다.");
+            if (!room.isHostConnection(connection)) {
+                throw error(NOT_HOST, "방장만 자리를 열고 닫을 수 있습니다.");
+            }
+            boolean changed;
+            try {
+                changed = room.setSlotOpen(slot, open);
+            } catch (IllegalArgumentException e) {
+                throw error(BAD_MESSAGE, "slot은 0~7이어야 합니다.");
+            } catch (IllegalStateException e) {
+                throw switch (e.getMessage()) {
+                    case SLOT_LOCKED -> error(SLOT_LOCKED, "%s은(는) 최대 %d명이라 이 자리는 열 수 없습니다."
+                            .formatted(GameMaps.name(room.mapId()), GameMaps.capacityOf(room.mapId())));
+                    case SLOT_OCCUPIED -> error(SLOT_OCCUPIED, "사람이 있는 자리는 닫을 수 없습니다.");
+                    case CAPACITY_INVALID -> error(CAPACITY_INVALID, "정원은 2명보다 줄일 수 없습니다.");
+                    default -> e;
+                };
+            }
+            reply.accept(null);
+            if (changed) {
+                state(room);
+                lobby();
+            }
+        }
+    }
+
     public void chat(long connection, long playerId, String text) {
         synchronized (lock) {
             Room room = memberships.get(connection);

@@ -39,7 +39,7 @@ class RoomMessagesTest {
 
         RoomMessages.RoomState state = RoomMessages.state(room);
 
-        assertEquals(new RoomMessages.RoomInfo(3, "제목", 8, "camp/camp08", "WAITING"), state.room());
+        assertEquals(new RoomMessages.RoomInfo(3, "제목", 8, "camp/camp08", "WAITING", List.of()), state.room());
         assertEquals(7, state.hostId());
         assertEquals(List.of(new RoomMessages.SeatedPlayer(7, "꼬꼬", 0, "kkokko", "BLUE", false)), state.players());
         assertEquals(new RoomMessages.ChatMessage(7, "꼬꼬", "안녕"),
@@ -48,11 +48,25 @@ class RoomMessagesTest {
     }
 
     @Test
+    void 대기실_상태에_닫힌_자리를_작은_순서로_싣고_정원은_열린_자리_수다() {
+        Room room = new Room(3, "제목", 6);
+        room.seat(100, List.of(new Player(7, "꼬꼬")), "kkokko", Team.BLUE);
+        room.setSlotOpen(2, false);
+
+        RoomMessages.RoomInfo info = RoomMessages.state(room).room();
+
+        assertEquals(List.of(2, 6, 7), info.closedSlots());
+        assertEquals(5, info.capacity());
+        assertEquals(5, RoomMessages.list(List.of(room)).rooms().getFirst().capacity());
+    }
+
+    @Test
     void body_record의_필드_타입은_명세의_JSON_타입과_같다() {
         Map<Class<?>, List<Class<?>>> expected = Map.of(
                 RoomMessages.RoomSummary.class, List.of(int.class, String.class, int.class, int.class, String.class,
                         String.class),
-                RoomMessages.RoomInfo.class, List.of(int.class, String.class, int.class, String.class, String.class),
+                RoomMessages.RoomInfo.class, List.of(int.class, String.class, int.class, String.class, String.class,
+                        List.class),
                 RoomMessages.SeatedPlayer.class, List.of(long.class, String.class, int.class, String.class,
                         String.class, boolean.class),
                 RoomMessages.ChatMessage.class, List.of(long.class, String.class, String.class));
