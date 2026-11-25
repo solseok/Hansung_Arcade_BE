@@ -413,6 +413,23 @@ class RoomTest {
     }
 
     @Test
+    void 맵을_바꿔_열린_자리가_빠져도_정원은_2명_아래로_떨어지지_않는다() {
+        Room room = new Room(1, "a", 2);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        room.setSlotOpen(7, true);
+        room.setSlotOpen(1, false);
+        assertEquals(List.of(1, 2, 3, 4, 5, 6), room.closedSlots());
+
+        room.changeMap("village/village10");
+
+        assertEquals(2, room.capacity());
+        assertEquals(List.of(2, 3, 4, 5, 6, 7), room.closedSlots(), "방장이 닫은 가장 작은 빈자리를 연다");
+        assertTrue(room.canSeat(1));
+        room.changeMap("camp/camp08");
+        assertEquals(List.of(2, 3, 4, 5, 6), room.closedSlots());
+    }
+
+    @Test
     void 자리_번호가_0에서_7_밖이면_IllegalArgumentException() {
         Room room = new Room(1, "a", 8);
 

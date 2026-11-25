@@ -248,6 +248,7 @@ public final class Room {
     /**
      * 맵을 바꾼다. 새 맵 최대 인원 밖 자리에 있던 사람은 열린 빈자리 가운데 가장 작은 번호로 옮긴다.
      * 열린 빈자리가 모자라면 방장이 닫은 빈자리를 작은 번호부터 열어 앉힌다.
+     * 맵 밖으로 열린 자리가 빠져 정원이 2명보다 적어지면 방장이 닫은 빈자리를 작은 번호부터 열어 2명을 맞춘다.
      *
      * @return 맵이 바뀌었으면 true
      * @throws IllegalArgumentException 고를 수 없는 맵이면
@@ -278,6 +279,9 @@ public final class Room {
                 }
                 seats.put(slot, m.withSlot(slot));
             }
+        }
+        for (int slot = 0; capacity() < MIN_CAPACITY && slot < limit; slot++) {
+            closedByHost[slot] = false;
         }
         return true;
     }
