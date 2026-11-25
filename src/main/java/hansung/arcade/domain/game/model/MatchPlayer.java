@@ -131,6 +131,42 @@ public final class MatchPlayer {
                 && cell.row() >= GameMap.rowAt(y - HALF_HITBOX) && cell.row() <= GameMap.rowAt(y + HALF_HITBOX - EDGE);
     }
 
+    /** 충돌 박스가 걸친 가장 왼쪽 열 (클라이언트 {@code Player.leftCol}) */
+    int leftCol() {
+        return GameMap.colAt(x - HALF_HITBOX);
+    }
+
+    /** 충돌 박스가 걸친 가장 오른쪽 열. 칸 경계에 딱 맞닿은 것은 걸친 것으로 보지 않는다 */
+    int rightCol() {
+        return GameMap.colAt(x + HALF_HITBOX - EDGE);
+    }
+
+    /** 충돌 박스가 걸친 가장 위 줄 */
+    int topRow() {
+        return GameMap.rowAt(y - HALF_HITBOX);
+    }
+
+    /** 충돌 박스가 걸친 가장 아래 줄. 칸 경계에 딱 맞닿은 것은 걸친 것으로 보지 않는다 */
+    int bottomRow() {
+        return GameMap.rowAt(y + HALF_HITBOX - EDGE);
+    }
+
+    /** 충돌 박스 너비 가운데 col 열 안에 든 비율 (0~1, 클라이언트 {@code Player.widthShareIn}) */
+    double widthShareIn(int col) {
+        return share(x, col);
+    }
+
+    /** 충돌 박스 높이 가운데 row 줄 안에 든 비율 (0~1) */
+    double heightShareIn(int row) {
+        return share(y, row);
+    }
+
+    private static double share(double center, int index) {
+        double from = Math.max(center - HALF_HITBOX, index * (double) GameMap.TILE_SIZE);
+        double to = Math.min(center + HALF_HITBOX, (index + 1) * (double) GameMap.TILE_SIZE);
+        return Math.max(0, to - from) / (2 * HALF_HITBOX);
+    }
+
     /** 충돌 박스 중심이 있는 칸 */
     public Cell cell() {
         return new Cell(GameMap.colAt(x), GameMap.rowAt(y));

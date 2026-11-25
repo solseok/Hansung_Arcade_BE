@@ -85,6 +85,13 @@ public final class Match {
     static final long MIN_TRAPPED_MS = 20;
     /** 두 캐릭터 중심이 가로·세로 모두 이보다 가까우면 닿은 것 (클라이언트 Player.TOUCH_DISTANCE) */
     static final double TOUCH_DISTANCE = GameMap.TILE_SIZE / 2.0;
+    /**
+     * 물줄기에 맞았다고 보는 겹침 비율 (클라이언트 BattleRules.SOAK_SHARE). 충돌 박스가 걸친 가로 줄 하나나 세로 열 하나에서
+     * 물줄기 칸과 겹친 넓이가 박스 넓이의 66% 이상이어야 갇힌다. 그래서 칸 경계에 걸쳐 서면 맞지 않을 수 있다(걸치기)
+     */
+    static final double SOAK_SHARE = 0.66;
+    /** 나눠 잰 비율이 경계에서 아주 조금 모자랄 수 있어 그만큼은 넘은 것으로 친다 (클라이언트와 같다) */
+    private static final double SHARE_SLACK = 1e-9;
     /** 보호막이 물줄기를 막아 주는 시간 (클라이언트 PlayerGear.SHIELD_SECONDS) */
     public static final long SHIELD_MS = 3_000;
     /** 스프링 신발로 뛰어 내려앉기까지 (클라이언트 PlayerGear.JUMP_SECONDS) */
@@ -697,7 +704,7 @@ public final class Match {
         }
     }
 
-    /** 땅에 선 보통 상태이고 보호막을 쓰는 중이 아닌 사람이 물줄기 칸에 있으면 가둔다 */
+    /** 땅에 선 보통 상태이고 보호막을 쓰는 중이 아닌 사람이 물줄기에 맞았으면({@link #soakingFlame}) 가둔다 */
     private void trapIfWet(MatchPlayer player, long now, List<MatchEvent> events) {
         trapIfWetAt(player, now, now, events);
     }
@@ -707,7 +714,7 @@ public final class Match {
         if (!player.isFree(at) || player.isShielded(at)) {
             return;
         }
-        Flame flame = flameAt(player.cell(), at);
+        Flame flame = soakingFlame(player, at);
         if (flame == null) {
             return;
         }
@@ -1045,6 +1052,58 @@ public final class Match {
     }
 
     /** 그 칸을 덮은 물줄기. 여럿이면 터진 칸이 가까운 것, 거리가 같으면 늦게 터진 것 (클라이언트 wetOwnersAt과 같은 순서) */
+    /**
+     * player를 맞힌 물줄기. 맞지 않았으면 null (클라이언트 BattleRules.soakingOwners와 같은 판정).
+     *
+     * <p>충돌 박스가 걸친 가로 줄마다, 세로 열마다 물줄기가 덮은 칸과 겹친 넓이를 박스 넓이에 대한 비율로 재어, 어느 한 줄이나
+     * 한 열에서라도 {@link #SOAK_SHARE} 이상이면 맞은 것이다. 그래서 네 칸이 만나는 곳에 서면 십자 물줄기가 그 가운데 세 칸을
+     * 덮어도 가로 줄기·세로 줄기와 각각 절반씩만 겹쳐 맞지 않는다(크아의 걸치기).</p>
+     *
+     * <p>맞았으면 박스와 가장 많이 겹친 물줄기 칸의 물줄기를 고른다(넓이가 같으면 위·왼쪽 칸). 그 칸에서는
+     * {@link #flameAt}처럼 가까이에서 터진 물줄기다.</p>
+     */
+    private Flame soakingFlame(MatchPlayer player, long now) {
+        int left = player.leftCol();
+        int right = player.rightCol();
+        int top = player.topRow();
+        int bottom = player.bottomRow();
+        boolean soaked = false;
+        for (int row = top; row <= bottom && !soaked; row++) {
+            double wet = 0;
+            for (int col = left; col <= right; col++) {
+                if (flameAt(new Cell(col, row), now) != null) {
+                    wet += player.widthShareIn(col);
+                }
+            }
+            soaked = player.heightShareIn(row) * wet >= SOAK_SHARE - SHARE_SLACK;
+        }
+        for (int col = left; col <= right && !soaked; col++) {
+            double wet = 0;
+            for (int row = top; row <= bottom; row++) {
+                if (flameAt(new Cell(col, row), now) != null) {
+                    wet += player.heightShareIn(row);
+                }
+            }
+            soaked = player.widthShareIn(col) * wet >= SOAK_SHARE - SHARE_SLACK;
+        }
+        if (!soaked) {
+            return null;
+        }
+        Flame best = null;
+        double bestShare = -1;
+        for (int row = top; row <= bottom; row++) {
+            for (int col = left; col <= right; col++) {
+                Flame flame = flameAt(new Cell(col, row), now);
+                double share = player.widthShareIn(col) * player.heightShareIn(row);
+                if (flame != null && share > bestShare) {
+                    best = flame;
+                    bestShare = share;
+                }
+            }
+        }
+        return best;
+    }
+
     private Flame flameAt(Cell cell, long now) {
         Flame best = null;
         int bestDistance = Integer.MAX_VALUE;
