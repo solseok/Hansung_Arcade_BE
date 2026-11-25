@@ -47,6 +47,15 @@ class GameMapsTest {
     }
 
     @Test
+    void 탱크는_캠프_08_전용이라_다른_맵에서는_블럭에서_나오지_않는다() {
+        assertEquals(Set.of("camp/camp08"), GameMaps.TANK_MAPS);
+        assertEquals(Set.of(), GameMaps.excludedDrops("camp/camp08"));
+        assertEquals(Set.of(ItemType.TANK), GameMaps.excludedDrops("patrit/patrit14"));
+        assertEquals(Set.of(ItemType.TANK), GameMaps.excludedDrops("village/village10"));
+        assertEquals(Set.of(ItemType.TANK), GameMaps.excludedDrops("test/anything"));
+    }
+
+    @Test
     void 랜덤_맵은_인원이_들어가는_맵에서만_고른다() {
         for (int seed = 0; seed < 200; seed++) {
             String seven = GameMaps.pick(7, new Random(seed));

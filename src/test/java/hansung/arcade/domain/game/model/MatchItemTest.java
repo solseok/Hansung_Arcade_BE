@@ -114,6 +114,49 @@ class MatchItemTest {
         return later;
     }
 
+    /** 3×3 맵. (0,0) 블럭에 고정 드롭 탱크. 1P(0,2)는 빨강, 2P(2,2)는 파랑 */
+    private static final List<String> TANK_MAP = List.of(
+            "[floor]", "...", "...", "...",
+            "[block]", "B..", "...", "...",
+            "[spawn]", "...", "...", "1.2",
+            "[item]", "t..", "...", "...");
+
+    /** 같은 모양의 맵을 mapId만 바꿔 두 명 경기로 연다 */
+    private static Match tankMatch(String mapId, RandomGenerator random) {
+        GameMap tankMap = MapLoader.parse(mapId, TANK_MAP);
+        Match match = new Match(1, tankMap, List.of(
+                new MatchPlayer(RED_1, CONN_RED, "빨강", Mascot.of("kkukku"), Team.RED, 1, tankMap.spawns().get(0)),
+                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, tankMap.spawns().get(1))),
+                random);
+        match.start(0);
+        match.loaded(CONN_RED, 0);
+        match.loaded(CONN_BLUE, 0);
+        match.tick(PLAY);
+        return match;
+    }
+
+    @Test
+    void 탱크는_캠프_08에서만_고정_드롭으로_나오고_다른_맵에서는_적혀_있어도_나오지_않는다() {
+        BalloonExploded camp = explodeAt(tankMatch("camp/camp08", NO_RANDOM), 1, PLAY);
+        BalloonExploded village = explodeAt(tankMatch("village/village10", NO_RANDOM), 1, PLAY);
+
+        assertEquals(List.of(new DroppedItem(1, 0, 0, "tank")), camp.items());
+        // 블럭은 똑같이 부서지지만 탱크는 놓지 않고, 대신 확률표를 굴리지도 않는다 (NO_RANDOM)
+        assertEquals(List.of(new ChangedTile(0, 0, ".")), village.tiles());
+        assertEquals(List.of(), village.items());
+    }
+
+    @Test
+    void 캠프_08이_아니면_확률표에서_탱크를_빼고_고른다() {
+        // 이 테스트 맵(test/items)은 캠프 08이 아니다. 두 번째 난수 0.79는 탱크를 넣으면 79(탱크 78~81)지만,
+        // 탱크를 뺀 합 97에서는 76.63이라 신발(72~78)이다
+        Match match = playing(new ScriptedRandom(0.0, 0.79));
+
+        BalloonExploded exploded = explodeAt(match, 5, PLAY);
+
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "shoe")), exploded.items());
+    }
+
     @Test
     void 블럭이_다_부서지면_패시브든_액티브든_고정_드롭이_나온다() {
         Match match = playing(NO_RANDOM);
