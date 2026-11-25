@@ -52,15 +52,9 @@ public final class RoomHandlers {
             rooms.ready(id, b.get("ready").booleanValue());
         }));
         dispatcher.register("CHAT", (c, r) -> handle(c, r, (id, p, b, reply) -> {
-            JsonNode player = b.get("playerId");
-            long playerId = p.getFirst().playerId();
-            if (player != null && !player.isNull()) {
-                if (!player.isIntegralNumber() || !player.canConvertToLong()) {
-                    throw bad("playerId는 정수여야 합니다.");
-                }
-                playerId = player.longValue();
-            }
-            rooms.chat(id, playerId, string(b, "text"));
+            // 보낸 사람이 없으면 로그인 순서의 1P다
+            Long sender = optionalPlayerId(b);
+            rooms.chat(id, sender != null ? sender : p.getFirst().playerId(), string(b, "text"));
         }));
     }
 
@@ -115,7 +109,7 @@ public final class RoomHandlers {
         return body.get(field).textValue();
     }
 
-    /** 고른 사람 (SELECT_CHARACTER·SELECT_TEAM). 없으면 null이고 그 연결의 플레이어 모두에 적용한다 */
+    /** body의 playerId (CHAT의 보낸 사람, SELECT_CHARACTER·SELECT_TEAM의 고른 사람). 없거나 null이면 null */
     private static Long optionalPlayerId(JsonNode body) throws ProtocolException {
         JsonNode player = body.get("playerId");
         if (player == null || player.isNull()) {

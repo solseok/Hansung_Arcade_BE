@@ -234,6 +234,8 @@ class RoomFlowTest {
                     {"SELECT_CHARACTER", "{\"character\":\"kkukku\",\"playerId\":999}"},
                     {"SELECT_TEAM", "{\"team\":\"BLUE\",\"playerId\":\"1\"}"},
                     {"SELECT_TEAM", "{\"team\":\"BLUE\",\"playerId\":999}"},
+                    {"SELECT_TEAM", "{\"team\":\"BLUE\",\"playerId\":true}"},
+                    {"SELECT_TEAM", "{\"team\":\"BLUE\",\"playerId\":99999999999999999999}"},
                     {"CHAT", "{}"}, {"CHAT", "{\"text\":5}"}, {"CHAT", "{\"text\":\"a\",\"playerId\":\"1\"}"},
                     {"CHAT", "{\"text\":\"a\",\"playerId\":1.5}"}, {"CHAT", "{\"text\":\"a\",\"playerId\":999}"}};
             for (String[] push : pushes) {

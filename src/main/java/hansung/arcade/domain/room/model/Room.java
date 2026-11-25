@@ -171,7 +171,7 @@ public final class Room {
      * 캐릭터를 바꾼다. playerId가 null이면 그 연결의 플레이어(1P·2P) 모두, 아니면 그 플레이어만 바꾼다.
      * 바뀐 것이 있으면 준비는 그 연결 전체가 풀린다 (준비는 연결 단위다).
      *
-     * @return 바뀐 것이 있는지
+     * @return 바뀐 것이 있는지. playerId가 이 연결의 플레이어가 아니면 아무것도 바꾸지 않고 false
      */
     public boolean selectCharacter(long connection, Long playerId, String value) {
         if (picked(connection, playerId).noneMatch(m -> !m.character().equals(value))) {

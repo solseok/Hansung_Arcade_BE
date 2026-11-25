@@ -162,6 +162,7 @@ public final class RoomService {
                 throw error(BAD_MESSAGE, "알 수 없는 캐릭터입니다.");
             }
             Room room = waiting(connection, "대기실에서만 캐릭터를 고를 수 있습니다.");
+            requireMine(room, connection, playerId);
             remember(characters, room, connection, playerId, value);
             if (room.selectCharacter(connection, playerId, value)) {
                 state(room);
@@ -183,6 +184,7 @@ public final class RoomService {
                 throw error(BAD_MESSAGE, "알 수 없는 팀입니다.");
             }
             Room room = waiting(connection, "대기실에서만 팀을 고를 수 있습니다.");
+            requireMine(room, connection, playerId);
             remember(teams, room, connection, playerId, team);
             if (room.selectTeam(connection, playerId, team)) {
                 state(room);
@@ -191,16 +193,22 @@ public final class RoomService {
     }
 
     /**
-     * 고른 값을 플레이어마다 기억한다 (다음 방에 들어갈 때 쓴다). playerId가 이 연결의 플레이어가 아니면 거절한다.
-     * lock 안에서 부른다.
+     * playerId가 이 연결의 플레이어인지 확인한다. null이면 그 연결의 모두라서 확인하지 않는다. 상태를 바꾸기 전에 부른다.
+     *
+     * @throws GameException 이 연결의 플레이어가 아니면 BAD_MESSAGE
      */
-    private <T> void remember(Map<Long, Map<Long, T>> chosen, Room room, long connection, Long playerId, T value) {
-        List<RoomMember> mine = room.membersOf(connection);
-        if (playerId != null && mine.stream().noneMatch(m -> m.playerId() == playerId)) {
-            throw error(BAD_MESSAGE, "내 플레이어가 아닙니다.");
+    private static RoomMember requireMine(Room room, long connection, Long playerId) {
+        if (playerId == null) {
+            return null;
         }
+        return room.membersOf(connection).stream().filter(m -> m.playerId() == playerId).findFirst()
+                .orElseThrow(() -> error(BAD_MESSAGE, "내 플레이어가 아닙니다."));
+    }
+
+    /** 고른 값을 플레이어마다 기억한다 (다음 방에 들어갈 때 쓴다). {@link #requireMine} 뒤에, lock 안에서 부른다 */
+    private <T> void remember(Map<Long, Map<Long, T>> chosen, Room room, long connection, Long playerId, T value) {
         Map<Long, T> byPlayer = chosen.computeIfAbsent(connection, key -> new HashMap<>());
-        for (RoomMember member : mine) {
+        for (RoomMember member : room.membersOf(connection)) {
             if (playerId == null || member.playerId() == playerId) {
                 byPlayer.put(member.playerId(), value);
             }
@@ -235,8 +243,7 @@ public final class RoomService {
             if (room == null) {
                 throw error(WRONG_STATE, "방 안에서만 채팅할 수 있습니다.");
             }
-            RoomMember member = room.membersOf(connection).stream().filter(m -> m.playerId() == playerId).findFirst()
-                    .orElseThrow(() -> error(BAD_MESSAGE, "내 플레이어가 아닙니다."));
+            RoomMember member = requireMine(room, connection, playerId);
             String clean = ChatText.clean(text);
             if (clean.isEmpty()) {
                 return;

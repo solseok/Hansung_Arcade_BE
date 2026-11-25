@@ -521,7 +521,7 @@ class RoomServiceTest {
     }
 
     @Test
-    void 캐릭터와_팀은_그_연결이_마지막으로_고른_값으로_들어가고_준비는_false다() {
+    void 캐릭터와_팀은_그_플레이어가_마지막으로_고른_값으로_들어가고_준비는_false다() {
         rooms.create(1, one(1, "가가"), "a", 8, reply(1));
         rooms.selectCharacter(1, "kkokko");
         rooms.selectTeam(1, "PINK");
@@ -987,6 +987,62 @@ class RoomServiceTest {
     }
 
     @Test
+    void playerId로_고른_사람이_이미_그_값이면_ROOM_STATE도_없고_준비도_그대로다() {
+        rooms.create(1, one(1, "방장"), "함께 해요", 8, reply(1));
+        rooms.join(2, two(2, "부기", "꾸꾸"), 1, reply(2));
+        rooms.selectCharacter(2, 22L, "kkukku");
+        rooms.ready(2, true);
+        clearSent();
+
+        rooms.selectCharacter(2, 22L, "kkukku");
+        rooms.selectTeam(2, 21L, "RED");
+
+        assertTrue(sent.isEmpty(), sent::toString);
+        rooms.selectCharacter(2, 21L, "kkokko");
+        JsonNode state = last(1, "ROOM_STATE");
+        assertFalse(player(state, "꾸꾸").get("ready").asBoolean());
+    }
+
+    @Test
+    void 방_밖이면_playerId보다_대기실이_아닌_것을_먼저_알린다() {
+        assertCode("WRONG_STATE", () -> rooms.selectCharacter(1, 99L, "kkukku"));
+        assertCode("WRONG_STATE", () -> rooms.selectTeam(1, 99L, "BLUE"));
+    }
+
+    @Test
+    void 남의_playerId로_거절된_고르기는_기억하지_않는다() {
+        rooms.create(1, one(1, "방장"), "함께 해요", 8, reply(1));
+        rooms.join(2, two(2, "부기", "꾸꾸"), 1, reply(2));
+        assertCode("BAD_MESSAGE", () -> rooms.selectCharacter(2, 11L, "kkukku"));
+        assertCode("BAD_MESSAGE", () -> rooms.selectTeam(2, 11L, "BLUE"));
+        rooms.leave(2, reply(2));
+
+        rooms.create(2, two(2, "부기", "꾸꾸"), "다시", 8, reply(2));
+
+        JsonNode state = last(2, "REPLY");
+        for (String nickname : List.of("부기", "꾸꾸")) {
+            assertEquals("sangsangbugi", player(state, nickname).get("character").asText());
+            assertEquals("RED", player(state, nickname).get("team").asText());
+        }
+    }
+
+    @Test
+    void 끊기면_1P_2P가_고른_값을_모두_잊는다() {
+        rooms.create(1, two(1, "부기", "꾸꾸"), "둘이서", 8, reply(1));
+        rooms.selectCharacter(1, 11L, "kkokko");
+        rooms.selectTeam(1, 12L, "PINK");
+        rooms.disconnect(1);
+
+        rooms.create(1, two(1, "부기", "꾸꾸"), "다시", 8, reply(1));
+
+        JsonNode state = last(1, "REPLY");
+        for (String nickname : List.of("부기", "꾸꾸")) {
+            assertEquals("sangsangbugi", player(state, nickname).get("character").asText());
+            assertEquals("RED", player(state, nickname).get("team").asText());
+        }
+    }
+
+    @Test
     void 내_연결의_플레이어가_아닌_playerId로는_고를_수_없다() {
         rooms.create(1, one(1, "방장"), "함께 해요", 8, reply(1));
         rooms.join(2, two(2, "부기", "꾸꾸"), 1, reply(2));
@@ -1440,7 +1496,7 @@ class RoomServiceTest {
     }
 
     @Test
-    void 이인용_2P_둘만_있으면_팀이_같아_ONE_TEAM이다() {
+    void 이인용_2P가_같은_팀이면_ONE_TEAM이다() {
         rooms.create(1, two(1, "가가", "나나"), "a", 8, reply(1));
 
         assertCode("ONE_TEAM", () -> rooms.startGame(1, reply(1)));
