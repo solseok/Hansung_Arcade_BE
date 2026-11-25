@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.random.RandomGenerator;
 
 /**
@@ -39,17 +40,28 @@ final class ItemDrops {
 
     /**
      * players명 경기에서 블럭 하나가 다 부서졌을 때 나올 아이템. 난수를 두 번까지 쓴다 (나오는지, 무엇인지).
+     * 나올 확률은 그대로이고, 종류는 excluded를 뺀 나머지 비율 안에서 고른다 (예: 탱크를 빼면 합 97에서 고른다).
      *
+     * @param excluded 이 맵에서는 나오지 않는 아이템 ({@link GameMaps#excludedDrops})
      * @return 나온 아이템. 액티브 아이템일 수도 있다. 안 나오면 비어 있다
      */
-    static Optional<ItemType> roll(RandomGenerator random, int players) {
+    static Optional<ItemType> roll(RandomGenerator random, int players, Set<ItemType> excluded) {
         if (random.nextDouble() >= dropChanceFor(players)) {
             return Optional.empty();
         }
-        double pick = random.nextDouble() * 100;
+        int total = 0;
+        for (Map.Entry<ItemType, Integer> entry : WEIGHTS.entrySet()) {
+            if (!excluded.contains(entry.getKey())) {
+                total += entry.getValue();
+            }
+        }
+        double pick = random.nextDouble() * total;
         int bound = 0;
         ItemType last = null;
         for (Map.Entry<ItemType, Integer> entry : WEIGHTS.entrySet()) {
+            if (excluded.contains(entry.getKey())) {
+                continue;
+            }
             bound += entry.getValue();
             last = entry.getKey();
             if (pick < bound) {

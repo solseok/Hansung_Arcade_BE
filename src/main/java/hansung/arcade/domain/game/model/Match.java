@@ -108,6 +108,8 @@ public final class Match {
     private final RandomGenerator random;
     /** 경기를 열 때의 인원 (한 연결의 1P·2P는 두 명). 블럭에서 아이템이 나올 확률을 정한다 */
     private final int playerCount;
+    /** 이 맵의 블럭에서 나오지 않는 아이템. 탱크는 캠프 08 전용이다 ({@link GameMaps#excludedDrops}) */
+    private final Set<ItemType> excludedDrops;
     /** 비행기가 떨어뜨릴 칸을 고른다 */
     private final AirDrop airDrop;
     /** 아직 떨어뜨릴 칸이 남은 비행기들. 나온 순서 */
@@ -136,6 +138,7 @@ public final class Match {
         this.map = map;
         this.random = Objects.requireNonNull(random);
         this.playerCount = participants.size();
+        this.excludedDrops = GameMaps.excludedDrops(map.id());
         this.airDrop = new AirDrop(map, this.random, participants.size());
         for (MatchPlayer player : participants) {
             if (players.putIfAbsent(player.playerId(), player) != null) {
@@ -843,10 +846,13 @@ public final class Match {
      * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 비율표로 정한다.
      * 나올 확률은 경기 인원에 맞춘다 ({@link ItemDrops#dropChanceFor}). 고정 드롭에는 난수를 쓰지 않는다.
      * 액티브 아이템(바늘·보호막·스프링 신발)도 패시브와 똑같이 놓는다.
+     * 탱크는 캠프 08 전용이라, 다른 맵에서는 비율표에서 빼고 고르고 고정 드롭으로 적혀 있어도 놓지 않는다
+     * ({@link #excludedDrops}).
      */
     private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
         return map.takeFixedDrop(cell.col(), cell.row())
-                .or(() -> ItemDrops.roll(random, playerCount))
+                .or(() -> ItemDrops.roll(random, playerCount, excludedDrops))
+                .filter(item -> !excludedDrops.contains(item))
                 .map(item -> placeItem(cell, item));
     }
 
