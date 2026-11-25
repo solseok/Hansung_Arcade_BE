@@ -4,6 +4,8 @@ import hansung.arcade.domain.game.model.GameMaps;
 import hansung.arcade.domain.game.model.Team;
 import hansung.arcade.domain.player.model.Player;
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Stream;
 import java.text.Normalizer;
 
 import static hansung.arcade.domain.room.exception.RoomErrorCode.CAPACITY_INVALID;
@@ -110,6 +112,12 @@ public final class Room {
     }
 
     public List<RoomMember> seat(long connection, List<Player> players, String character, Team team) {
+        return seat(connection, players, player -> character, player -> team);
+    }
+
+    /** 플레이어마다 다른 캐릭터·팀으로 앉힌다 (1P·2P가 마지막으로 고른 값) */
+    public List<RoomMember> seat(long connection, List<Player> players, Function<Player, String> character,
+                                 Function<Player, Team> team) {
         if (players.isEmpty()) {
             throw new IllegalArgumentException();
         }
@@ -122,7 +130,8 @@ public final class Room {
             while (seats.containsKey(slot)) {
                 slot++;
             }
-            RoomMember m = new RoomMember(p.playerId(), connection, p.nickname(), slot, character, team, false);
+            RoomMember m = new RoomMember(p.playerId(), connection, p.nickname(), slot, character.apply(p), team.apply(p),
+                    false);
             seats.put(slot, m);
             added.add(m);
             if (hostId == 0) {
@@ -155,19 +164,45 @@ public final class Room {
     }
 
     public boolean selectCharacter(long connection, String value) {
-        if (membersOf(connection).stream().noneMatch(m -> !m.character().equals(value))) {
+        return selectCharacter(connection, null, value);
+    }
+
+    /**
+     * 캐릭터를 바꾼다. playerId가 null이면 그 연결의 플레이어(1P·2P) 모두, 아니면 그 플레이어만 바꾼다.
+     * 바뀐 것이 있으면 준비는 그 연결 전체가 풀린다 (준비는 연결 단위다).
+     *
+     * @return 바뀐 것이 있는지. playerId가 이 연결의 플레이어가 아니면 아무것도 바꾸지 않고 false
+     */
+    public boolean selectCharacter(long connection, Long playerId, String value) {
+        if (picked(connection, playerId).noneMatch(m -> !m.character().equals(value))) {
             return false;
         }
-        seats.replaceAll((s, m) -> m.connectionId() == connection ? m.withCharacter(value) : m);
+        seats.replaceAll((s, m) -> m.connectionId() != connection ? m
+                : isPicked(m, playerId) ? m.withCharacter(value) : m.withReady(false));
         return true;
     }
 
     public boolean selectTeam(long connection, Team value) {
-        if (membersOf(connection).stream().noneMatch(m -> m.team() != value)) {
+        return selectTeam(connection, null, value);
+    }
+
+    /** 팀을 바꾼다. playerId와 준비는 {@link #selectCharacter(long, Long, String)}와 같다 */
+    public boolean selectTeam(long connection, Long playerId, Team value) {
+        if (picked(connection, playerId).noneMatch(m -> m.team() != value)) {
             return false;
         }
-        seats.replaceAll((s, m) -> m.connectionId() == connection ? m.withTeam(value) : m);
+        seats.replaceAll((s, m) -> m.connectionId() != connection ? m
+                : isPicked(m, playerId) ? m.withTeam(value) : m.withReady(false));
         return true;
+    }
+
+    /** 이 연결의 플레이어 가운데 고른 사람 (playerId가 null이면 모두) */
+    private Stream<RoomMember> picked(long connection, Long playerId) {
+        return membersOf(connection).stream().filter(m -> isPicked(m, playerId));
+    }
+
+    private static boolean isPicked(RoomMember member, Long playerId) {
+        return playerId == null || member.playerId() == playerId;
     }
 
     public boolean changeMap(String value) {
