@@ -234,6 +234,30 @@ public final class GameService {
         notifyIfFinished(match);
     }
 
+    /** BALLOON_THROW. 경기 중이 아니거나 던질 수 없으면 조용히 버린다 */
+    public void throwBalloon(long connectionId, long playerId, int col, int row, Facing direction) {
+        Match match = byConnection.get(connectionId);
+        if (match == null) {
+            return;
+        }
+        synchronized (match) {
+            deliver(match, match.throwBalloon(connectionId, playerId, col, row, direction, clock.getAsLong()));
+        }
+        notifyIfFinished(match);
+    }
+
+    /** BALLOON_KICK. 경기 중이 아니거나 찰 수 없으면 조용히 버린다 */
+    public void kickBalloon(long connectionId, long playerId, int col, int row, Facing direction) {
+        Match match = byConnection.get(connectionId);
+        if (match == null) {
+            return;
+        }
+        synchronized (match) {
+            deliver(match, match.kickBalloon(connectionId, playerId, col, row, direction, clock.getAsLong()));
+        }
+        notifyIfFinished(match);
+    }
+
     /** ITEM_USE. 경기 중이 아니거나 쓸 수 없으면 조용히 버린다 */
     public void useItem(long connectionId, long playerId, ItemType item) {
         Match match = byConnection.get(connectionId);

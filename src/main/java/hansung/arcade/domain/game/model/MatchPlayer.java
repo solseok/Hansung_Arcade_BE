@@ -222,12 +222,12 @@ public final class MatchPlayer {
         return speedLevel;
     }
 
-    /** 물풍선을 밀 수 있는지 (신발, 빨간 악마). 서버는 아직 밀기를 판정하지 않고 상태만 들고 있다 */
+    /** 막힌 앞 칸의 물풍선을 차서 미끄러뜨릴 수 있는지 (신발, 빨간 악마). BALLOON_KICK에서 본다 */
     boolean canPushBalloons() {
         return canPushBalloons;
     }
 
-    /** 물풍선을 던질 수 있는지 (장갑). 서버는 아직 던지기를 판정하지 않고 상태만 들고 있다 */
+    /** 선 칸이나 앞 칸의 물풍선을 던질 수 있는지 (장갑). BALLOON_THROW에서 본다 */
     boolean canThrowBalloons() {
         return canThrowBalloons;
     }

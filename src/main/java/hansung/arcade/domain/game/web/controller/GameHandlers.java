@@ -5,7 +5,9 @@ import hansung.arcade.core.net.ProtocolException;
 import hansung.arcade.domain.game.business.GameService;
 import hansung.arcade.domain.game.model.Facing;
 import hansung.arcade.domain.game.model.ItemType;
+import hansung.arcade.domain.game.web.dto.BalloonKickRequest;
 import hansung.arcade.domain.game.web.dto.BalloonPlaceRequest;
+import hansung.arcade.domain.game.web.dto.BalloonThrowRequest;
 import hansung.arcade.domain.game.web.dto.BoxPushRequest;
 import hansung.arcade.domain.game.web.dto.ItemPickupRequest;
 import hansung.arcade.domain.game.web.dto.ItemUseRequest;
@@ -23,6 +25,8 @@ import java.util.Objects;
  *   <li>ITEM_PICKUP: 두 사람이 함께 보내면 늦은 쪽은 당연히 실패하므로, 인정되지 않아도 ERROR 없이 버린다</li>
  *   <li>BOX_PUSH: 두 사람이 같은 상자를 함께 밀면 늦은 쪽은 당연히 실패하므로, 밀 수 없어도 ERROR 없이 버린다</li>
  *   <li>ITEM_USE: 손에 든 것과 다르거나 지금 쓸 수 없으면 ERROR 없이 버린다 (Notion 명세: 에러 코드 없음)</li>
+ *   <li>BALLOON_THROW, BALLOON_KICK: 통신 지연으로 물풍선이 이미 움직였거나 터졌을 수 있으므로, 던지거나 찰 수 없어도
+ *       ERROR 없이 버린다</li>
  * </ul>
  */
 public final class GameHandlers {
@@ -33,6 +37,8 @@ public final class GameHandlers {
     public static final String ITEM_PICKUP = "ITEM_PICKUP";
     public static final String BOX_PUSH = "BOX_PUSH";
     public static final String ITEM_USE = "ITEM_USE";
+    public static final String BALLOON_THROW = "BALLOON_THROW";
+    public static final String BALLOON_KICK = "BALLOON_KICK";
     public static final String GAME_EXIT = "GAME_EXIT";
 
     private final GameService gameService;
@@ -99,6 +105,24 @@ public final class GameHandlers {
             ItemType item = body == null || !body.isComplete() ? null : ItemType.fromId(body.item());
             if (item != null) {
                 gameService.useItem(connection.id(), body.playerId(), item);
+            }
+            return null;
+        });
+
+        dispatcher.register(BALLOON_THROW, (connection, request) -> {
+            BalloonThrowRequest body = bodyOrNull(() -> request.bodyAs(BalloonThrowRequest.class));
+            if (body != null && body.isComplete()) {
+                gameService.throwBalloon(connection.id(), body.playerId(), body.col(), body.row(),
+                        Facing.parse(body.direction()));
+            }
+            return null;
+        });
+
+        dispatcher.register(BALLOON_KICK, (connection, request) -> {
+            BalloonKickRequest body = bodyOrNull(() -> request.bodyAs(BalloonKickRequest.class));
+            if (body != null && body.isComplete()) {
+                gameService.kickBalloon(connection.id(), body.playerId(), body.col(), body.row(),
+                        Facing.parse(body.direction()));
             }
             return null;
         });
