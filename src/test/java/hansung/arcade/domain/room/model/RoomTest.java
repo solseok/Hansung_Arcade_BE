@@ -157,6 +157,44 @@ class RoomTest {
     }
 
     @Test
+    void playerId를_주면_그_플레이어만_바꾸고_준비는_그_연결_전체가_풀린다() {
+        Room room = new Room(1, "a", 8);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        room.seat(200, players(2, 3), "kkukku", Team.RED);
+        room.ready(200, true);
+
+        assertTrue(room.selectCharacter(200, 3L, "kkokko"));
+        assertEquals(List.of("kkukku", "kkokko"), room.membersOf(200).stream().map(RoomMember::character).toList());
+        assertEquals(List.of(false, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+
+        room.ready(200, true);
+        assertTrue(room.selectTeam(200, 2L, Team.BLUE));
+        assertEquals(List.of(Team.BLUE, Team.RED), room.membersOf(200).stream().map(RoomMember::team).toList());
+        assertEquals(List.of(false, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+
+        // 그 플레이어가 이미 그 값이면 아무것도 바뀌지 않는다 (다른 플레이어 값은 보지 않는다)
+        room.ready(200, true);
+        assertFalse(room.selectCharacter(200, 3L, "kkokko"));
+        assertFalse(room.selectTeam(200, 2L, Team.BLUE));
+        assertEquals(List.of(true, true), room.membersOf(200).stream().map(RoomMember::ready).toList());
+
+        // 다른 연결의 플레이어는 고를 수 없다
+        assertFalse(room.selectCharacter(200, 1L, "sangzzi"));
+        assertEquals("kkukku", room.membersOf(100).getFirst().character());
+    }
+
+    @Test
+    void 플레이어마다_다른_캐릭터와_팀으로_앉힌다() {
+        Room room = new Room(1, "a", 8);
+
+        List<RoomMember> seated = room.seat(100, players(1, 2),
+                p -> p.playerId() == 1 ? "kkukku" : "kkokko", p -> p.playerId() == 1 ? Team.RED : Team.BLUE);
+
+        assertEquals(List.of("kkukku", "kkokko"), seated.stream().map(RoomMember::character).toList());
+        assertEquals(List.of(Team.RED, Team.BLUE), seated.stream().map(RoomMember::team).toList());
+    }
+
+    @Test
     void 연결의_플레이어와_방장_연결을_찾는다() {
         Room room = new Room(1, "a", 8);
         room.seat(100, players(1, 2), "kkukku", Team.RED);

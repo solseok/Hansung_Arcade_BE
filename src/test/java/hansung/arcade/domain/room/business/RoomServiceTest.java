@@ -950,6 +950,96 @@ class RoomServiceTest {
     }
 
     @Test
+    void playerId를_주면_그_플레이어만_바꾸고_주지_않으면_그_연결의_1P_2P_모두_바꾼다() {
+        rooms.create(1, two(1, "부기", "꾸꾸"), "둘이서", 8, reply(1));
+        clearSent();
+
+        rooms.selectCharacter(1, 12L, "kkukku");
+        rooms.selectTeam(1, 12L, "BLUE");
+
+        JsonNode state = last(1, "ROOM_STATE");
+        assertEquals("sangsangbugi", player(state, "부기").get("character").asText());
+        assertEquals("RED", player(state, "부기").get("team").asText());
+        assertEquals("kkukku", player(state, "꾸꾸").get("character").asText());
+        assertEquals("BLUE", player(state, "꾸꾸").get("team").asText());
+
+        rooms.selectCharacter(1, null, "kkokko");
+        state = last(1, "ROOM_STATE");
+        assertEquals("kkokko", player(state, "부기").get("character").asText());
+        assertEquals("kkokko", player(state, "꾸꾸").get("character").asText());
+        assertEquals("BLUE", player(state, "꾸꾸").get("team").asText(), "팀은 그대로다");
+    }
+
+    @Test
+    void 한_사람만_바꿔도_준비는_그_연결_전체가_풀린다() {
+        rooms.create(1, one(1, "방장"), "함께 해요", 8, reply(1));
+        rooms.join(2, two(2, "부기", "꾸꾸"), 1, reply(2));
+        rooms.ready(2, true);
+        clearSent();
+
+        rooms.selectCharacter(2, 22L, "sangzzi");
+
+        JsonNode state = last(1, "ROOM_STATE");
+        assertEquals("sangzzi", player(state, "꾸꾸").get("character").asText());
+        assertEquals("sangsangbugi", player(state, "부기").get("character").asText());
+        assertFalse(player(state, "부기").get("ready").asBoolean());
+        assertFalse(player(state, "꾸꾸").get("ready").asBoolean());
+    }
+
+    @Test
+    void 내_연결의_플레이어가_아닌_playerId로는_고를_수_없다() {
+        rooms.create(1, one(1, "방장"), "함께 해요", 8, reply(1));
+        rooms.join(2, two(2, "부기", "꾸꾸"), 1, reply(2));
+        clearSent();
+
+        assertCode("BAD_MESSAGE", () -> rooms.selectCharacter(2, 11L, "kkukku"));
+        assertCode("BAD_MESSAGE", () -> rooms.selectTeam(2, 99L, "BLUE"));
+        assertTrue(sent.isEmpty());
+    }
+
+    @Test
+    void 플레이어마다_고른_값은_다음_방에도_이어진다() {
+        rooms.create(1, two(1, "부기", "꾸꾸"), "둘이서", 8, reply(1));
+        rooms.selectCharacter(1, 11L, "kkokko");
+        rooms.selectTeam(1, 12L, "PINK");
+        rooms.leave(1, reply(1));
+        clearSent();
+
+        rooms.create(1, two(1, "부기", "꾸꾸"), "다시", 8, reply(1));
+
+        JsonNode state = last(1, "REPLY");
+        assertEquals("kkokko", player(state, "부기").get("character").asText());
+        assertEquals("RED", player(state, "부기").get("team").asText());
+        assertEquals("sangsangbugi", player(state, "꾸꾸").get("character").asText());
+        assertEquals("PINK", player(state, "꾸꾸").get("team").asText());
+    }
+
+    @Test
+    void 한_연결의_1P_2P가_다른_팀이면_둘이서_게임을_시작해_각자_고른_캐릭터로_나간다() {
+        rooms.create(1, two(1, "부기", "꾸꾸"), "둘이서", 8, reply(1));
+        rooms.selectCharacter(1, 12L, "hansungnyangi");
+        rooms.selectTeam(1, 12L, "BLUE");
+        clearSent();
+
+        rooms.startGame(1, reply(1));
+
+        JsonNode started = last(1, "GAME_STARTED");
+        JsonNode first = null;
+        JsonNode second = null;
+        for (JsonNode p : started.get("players")) {
+            if (p.get("playerId").asLong() == 11) {
+                first = p;
+            } else {
+                second = p;
+            }
+        }
+        assertEquals("sangsangbugi", first.get("character").asText());
+        assertEquals("RED", first.get("team").asText());
+        assertEquals("hansungnyangi", second.get("character").asText());
+        assertEquals("BLUE", second.get("team").asText());
+    }
+
+    @Test
     void 캐릭터는_다섯_가지와_random만_고를_수_있다() {
         hostAndGuest();
         for (String id : List.of("sangsangbugi", "kkukku", "kkokko", "sangzzi", "hansungnyangi", "random")) {

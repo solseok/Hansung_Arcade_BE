@@ -229,6 +229,11 @@ class RoomFlowTest {
                     {"SELECT_CHARACTER", "{}"}, {"SELECT_CHARACTER", "{\"character\":1}"},
                     {"SELECT_CHARACTER", "{\"character\":\"pikachu\"}"},
                     {"SELECT_TEAM", "{}"}, {"SELECT_TEAM", "{\"team\":0}"}, {"SELECT_TEAM", "{\"team\":\"blue\"}"},
+                    {"SELECT_CHARACTER", "{\"character\":\"kkukku\",\"playerId\":\"1\"}"},
+                    {"SELECT_CHARACTER", "{\"character\":\"kkukku\",\"playerId\":1.5}"},
+                    {"SELECT_CHARACTER", "{\"character\":\"kkukku\",\"playerId\":999}"},
+                    {"SELECT_TEAM", "{\"team\":\"BLUE\",\"playerId\":\"1\"}"},
+                    {"SELECT_TEAM", "{\"team\":\"BLUE\",\"playerId\":999}"},
                     {"CHAT", "{}"}, {"CHAT", "{\"text\":5}"}, {"CHAT", "{\"text\":\"a\",\"playerId\":\"1\"}"},
                     {"CHAT", "{\"text\":\"a\",\"playerId\":1.5}"}, {"CHAT", "{\"text\":\"a\",\"playerId\":999}"}};
             for (String[] push : pushes) {
@@ -258,6 +263,8 @@ class RoomFlowTest {
                     {"READY", "{\"ready\":1}", "ready는 true나 false여야 합니다."},
                     {"SELECT_CHARACTER", "{}", "character는 문자열이어야 합니다."},
                     {"SELECT_TEAM", "{}", "team은 문자열이어야 합니다."},
+                    {"SELECT_CHARACTER", "{\"character\":\"kkukku\",\"playerId\":\"1\"}", "playerId는 정수여야 합니다."},
+                    {"SELECT_TEAM", "{\"team\":\"BLUE\",\"playerId\":999}", "내 플레이어가 아닙니다."},
                     {"CHAT", "{\"text\":1}", "text는 문자열이어야 합니다."},
                     {"CHAT", "{\"text\":\"a\",\"playerId\":\"1\"}", "playerId는 정수여야 합니다."},
                     {"CHAT", "{\"playerId\":\"x\"}", "playerId는 정수여야 합니다."}};
@@ -585,6 +592,32 @@ class RoomFlowTest {
                 chat = pair.receive("CHAT_MESSAGE");
             }
             assertEquals("일피", chat.at("/body/sender").asText());
+        }
+    }
+
+    @Test
+    void 한_컴퓨터의_2P는_playerId로_따로_캐릭터와_팀을_고른다() throws IOException {
+        try (Client pair = new Client("일피", "이피")) {
+            pair.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4}}");
+            JsonNode created = pair.next("ROOM_CREATE");
+            long second = created.at("/body/players/1/playerId").asLong();
+            assertEquals("이피", created.at("/body/players/1/nickname").asText());
+
+            pair.send("{\"type\":\"SELECT_CHARACTER\",\"body\":{\"character\":\"kkukku\",\"playerId\":" + second + "}}");
+            JsonNode state = pair.receive("ROOM_STATE");
+            assertEquals("sangsangbugi", state.at("/body/players/0/character").asText());
+            assertEquals("kkukku", state.at("/body/players/1/character").asText());
+
+            pair.send("{\"type\":\"SELECT_TEAM\",\"body\":{\"team\":\"BLUE\",\"playerId\":" + second + "}}");
+            state = pair.receive("ROOM_STATE");
+            assertEquals("RED", state.at("/body/players/0/team").asText());
+            assertEquals("BLUE", state.at("/body/players/1/team").asText());
+
+            // playerId 없이 보내면 예전처럼 둘 다 바뀐다
+            pair.send("{\"type\":\"SELECT_CHARACTER\",\"body\":{\"character\":\"kkokko\"}}");
+            state = pair.receive("ROOM_STATE");
+            assertEquals("kkokko", state.at("/body/players/0/character").asText());
+            assertEquals("kkokko", state.at("/body/players/1/character").asText());
         }
     }
 

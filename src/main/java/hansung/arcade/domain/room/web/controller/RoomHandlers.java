@@ -41,10 +41,10 @@ public final class RoomHandlers {
         dispatcher.register("CHANGE_MAP",
                 (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.changeMap(id, string(b, "mapId"), reply)));
         dispatcher.register("GAME_START", (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.startGame(id, reply)));
-        dispatcher.register("SELECT_CHARACTER",
-                (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.selectCharacter(id, string(b, "character"))));
-        dispatcher.register("SELECT_TEAM",
-                (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.selectTeam(id, string(b, "team"))));
+        dispatcher.register("SELECT_CHARACTER", (c, r) -> handle(c, r,
+                (id, p, b, reply) -> rooms.selectCharacter(id, optionalPlayerId(b), string(b, "character"))));
+        dispatcher.register("SELECT_TEAM", (c, r) -> handle(c, r,
+                (id, p, b, reply) -> rooms.selectTeam(id, optionalPlayerId(b), string(b, "team"))));
         dispatcher.register("READY", (c, r) -> handle(c, r, (id, p, b, reply) -> {
             if (!b.path("ready").isBoolean()) {
                 throw bad("ready는 true나 false여야 합니다.");
@@ -113,6 +113,18 @@ public final class RoomHandlers {
             throw bad(field + (Set.of("title", "team").contains(field) ? "은" : "는") + " 문자열이어야 합니다.");
         }
         return body.get(field).textValue();
+    }
+
+    /** 고른 사람 (SELECT_CHARACTER·SELECT_TEAM). 없으면 null이고 그 연결의 플레이어 모두에 적용한다 */
+    private static Long optionalPlayerId(JsonNode body) throws ProtocolException {
+        JsonNode player = body.get("playerId");
+        if (player == null || player.isNull()) {
+            return null;
+        }
+        if (!player.isIntegralNumber() || !player.canConvertToLong()) {
+            throw bad("playerId는 정수여야 합니다.");
+        }
+        return player.longValue();
     }
 
     private static int integer(JsonNode body, String field) throws ProtocolException {
