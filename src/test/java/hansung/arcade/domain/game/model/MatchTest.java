@@ -293,6 +293,43 @@ class MatchTest {
     }
 
     @Test
+    void 물줄기_칸에_66퍼센트_넘게_걸쳐야_갇히고_덜_걸치면_갇히지_않는다() {
+        // (0,1) 물풍선의 물줄기는 (1,1)까지. 1P 충돌 박스(36px)가 (1,1)에 든 비율로 가린다
+        // cx(1)+11: 박스 51~87 중 (1,1)이 51~80 = 29/36 ≈ 0.81 → 갇힘
+        // cx(1)+14: 박스 54~90 중 (1,1)이 54~80 = 26/36 ≈ 0.72 → 갇힘
+        // cx(1)+17: 박스 57~93 중 (1,1)이 57~80 = 23/36 ≈ 0.64 → 걸치기로 안 갇힘
+        for (double offset : new double[]{11, 14, 17}) {
+            Match match = playing(Mascot.of("kkukku"), false);
+            match.move(CONN_RED, RED_1, cx(1) + offset, cy(1), Facing.LEFT, false, PLAY);
+            match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
+
+            match.tick(PLAY + Match.FUSE_MS);
+
+            MatchPlayer.State expected = offset < 17 ? MatchPlayer.State.TRAPPED : MatchPlayer.State.ALIVE;
+            assertEquals(expected, match.player(RED_1).state(), "offset=" + offset);
+        }
+    }
+
+    @Test
+    void 네_칸이_만나는_곳에_서면_십자_물줄기가_세_칸을_덮어도_갇히지_않는다() {
+        Match match = playing(Mascot.of("kkukku"), false);
+        // (1,1) 물풍선의 십자 물줄기는 (0,1)·(1,1)·(2,1)·(1,0)·(1,2)를 덮고 (0,2)는 덮지 않는다
+        match.move(CONN_RED, RED_1, cx(1), cy(1), Facing.DOWN, false, PLAY);
+        match.placeBalloon(CONN_RED, RED_1, 1, 1, PLAY);
+        // (0,1)·(1,1)·(0,2)·(1,2)가 만나는 점. 가로 줄마다·세로 열마다 절반씩만 젖어 66%에 못 미친다
+        match.move(CONN_RED, RED_1, GameMap.TILE_SIZE, 2 * GameMap.TILE_SIZE, Facing.DOWN, false, PLAY + 100);
+
+        List<MatchEvent> events = match.tick(PLAY + Match.FUSE_MS);
+
+        assertTrue(types(events).contains(MatchMessages.BALLOON_EXPLODED));
+        assertEquals(MatchPlayer.State.ALIVE, match.player(RED_1).state());
+        // 물줄기가 남은 동안 (1,1) 쪽으로 조금만 옮겨도 그 열이 66%를 넘어 갇힌다
+        match.move(CONN_RED, RED_1, GameMap.TILE_SIZE + 7, 2 * GameMap.TILE_SIZE, Facing.RIGHT, true,
+                PLAY + Match.FUSE_MS + 50);
+        assertEquals(MatchPlayer.State.TRAPPED, match.player(RED_1).state());
+    }
+
+    @Test
     void 다른_팀이_갇힌_사람에게_닿으면_터지고_남은_팀이_하나면_경기가_끝난다() {
         Match match = playing(Mascot.of("kkukku"), false);
         match.placeBalloon(CONN_RED, RED_1, 0, 0, PLAY);
@@ -313,9 +350,10 @@ class MatchTest {
     @Test
     void 갇힐_때_닿아_있던_같은_팀은_움직이지_않아도_다음_tick에_구해_준다() {
         Match match = playing(Mascot.of("kkukku"), true);
-        // 1P는 (1,1) 오른쪽 끝, 3P는 바로 옆 (2,1) 왼쪽 끝. (0,1) 물풍선의 물줄기는 (1,1)까지만 닿는다
+        // 1P는 (1,1)에 거의 다 들어가 있고(걸치기가 아니라 갇힌다), 3P는 바로 옆 (2,1) 왼쪽 끝이라 닿아 있다.
+        // (0,1) 물풍선의 물줄기는 (1,1)까지만 닿는다
         match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
-        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 5, cy(1), Facing.LEFT, false, PLAY);
         match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
 
         List<MatchEvent> trapped = match.tick(PLAY + Match.FUSE_MS);
@@ -331,7 +369,7 @@ class MatchTest {
     void 막_갇힌_사람은_곧바로_들어온_MOVE로는_풀리지_않는다() {
         Match match = playing(Mascot.of("kkukku"), true);
         match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
-        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 5, cy(1), Facing.LEFT, false, PLAY);
         match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
         match.tick(PLAY + Match.FUSE_MS);
 
@@ -346,7 +384,7 @@ class MatchTest {
     void 구해진_뒤_빠져나오는_동안은_남은_물줄기에_다시_갇히지_않는다() {
         Match match = playing(Mascot.of("kkukku"), true);
         match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
-        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 5, cy(1), Facing.LEFT, false, PLAY);
         match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
         long trappedAt = PLAY + Match.FUSE_MS;
         match.tick(trappedAt);
@@ -354,7 +392,7 @@ class MatchTest {
         assertEquals(MatchPlayer.State.ALIVE, match.player(RED_1).state());
 
         // 물줄기(FLAME_MS)는 아직 (1,1)에 남아 있다
-        List<MatchEvent> events = match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, trappedAt + 50);
+        List<MatchEvent> events = match.move(CONN_RED, RED_1, cx(1) + 5, cy(1), Facing.LEFT, false, trappedAt + 50);
 
         assertEquals(List.of(MatchMessages.PLAYER_MOVED), types(events));
         assertEquals(MatchPlayer.State.ALIVE, match.player(RED_1).state());
@@ -368,7 +406,7 @@ class MatchTest {
         Match match = playing(Mascot.of("kkukku"), true);
         match.move(CONN_RED, RED_3, cx(2) - 18, cy(1), Facing.LEFT, false, PLAY);
         match.move(CONN_BLUE, BLUE, cx(2) - 16, cy(1) + 2, Facing.LEFT, false, PLAY);
-        match.move(CONN_RED, RED_1, cx(1) + 18, cy(1), Facing.LEFT, false, PLAY);
+        match.move(CONN_RED, RED_1, cx(1) + 5, cy(1), Facing.LEFT, false, PLAY);
         match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
         match.tick(PLAY + Match.FUSE_MS);
 
