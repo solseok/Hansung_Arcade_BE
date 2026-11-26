@@ -346,7 +346,8 @@ public final class MatchPlayer {
                     mascot.speedLevel().max());
             case ULTRA -> maxOutWaterRange();
             case RED_DEVIL -> {
-                maxOutWaterRange();
+                // 붉은 악마: 이동속도를 캐릭터 최댓값까지 한 번에 올리고 물풍선을 밀 수 있게 한다 (속도 최대 + 신발)
+                speedLevel = mascot.speedLevel().max();
                 canPushBalloons = true;
             }
             case SHOE -> canPushBalloons = true;

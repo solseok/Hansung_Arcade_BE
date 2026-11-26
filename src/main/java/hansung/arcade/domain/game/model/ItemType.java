@@ -13,7 +13,7 @@ public enum ItemType {
     ULTRA("ultra", 'u'),
     /** 이동속도 +1 */
     ROLLER_SHOE("roller_shoe", 'r'),
-    /** 물줄기 길이를 최댓값으로 하고 물풍선을 밀 수 있게 */
+    /** 이동속도를 캐릭터 최댓값으로 하고 물풍선을 밀 수 있게 (속도 최대 + 신발) */
     RED_DEVIL("red_devil", 'd'),
     /** 물풍선을 던질 수 있게 */
     GLOVE("glove", 'g'),
