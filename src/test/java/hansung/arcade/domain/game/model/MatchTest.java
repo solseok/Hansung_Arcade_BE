@@ -294,18 +294,19 @@ class MatchTest {
 
     @Test
     void 물줄기_칸에_66퍼센트_넘게_걸쳐야_갇히고_덜_걸치면_갇히지_않는다() {
-        // (0,1) 물풍선의 물줄기는 (1,1)까지. 1P 충돌 박스(36px)가 (1,1)에 든 비율로 가린다
-        // cx(1)+11: 박스 51~87 중 (1,1)이 51~80 = 29/36 ≈ 0.81 → 갇힘
-        // cx(1)+14: 박스 54~90 중 (1,1)이 54~80 = 26/36 ≈ 0.72 → 갇힘
-        // cx(1)+17: 박스 57~93 중 (1,1)이 57~80 = 23/36 ≈ 0.64 → 걸치기로 안 갇힘
-        for (double offset : new double[]{11, 14, 17}) {
+        // (0,1) 물풍선의 물줄기는 (1,1)까지. 1P 충돌 박스(36px)가 (1,1)(40~80px)에 든 비율로 가린다. cx(1)은 60이다
+        // cx(1)+11: 박스 53~89 중 (1,1)이 53~80 = 27/36 = 0.75 → 갇힘
+        // cx(1)+14: 박스 56~92 중 (1,1)이 56~80 = 24/36 ≈ 0.667 → 갇힘 (66% 이상)
+        // cx(1)+15: 박스 57~93 중 (1,1)이 57~80 = 23/36 ≈ 0.639 → 걸치기로 안 갇힘
+        // cx(1)+17: 박스 59~95 중 (1,1)이 59~80 = 21/36 ≈ 0.583 → 안 갇힘
+        for (double offset : new double[]{11, 14, 15, 17}) {
             Match match = playing(Mascot.of("kkukku"), false);
             match.move(CONN_RED, RED_1, cx(1) + offset, cy(1), Facing.LEFT, false, PLAY);
             match.placeBalloon(CONN_RED, RED_1, 0, 1, PLAY);
 
             match.tick(PLAY + Match.FUSE_MS);
 
-            MatchPlayer.State expected = offset < 17 ? MatchPlayer.State.TRAPPED : MatchPlayer.State.ALIVE;
+            MatchPlayer.State expected = offset <= 14 ? MatchPlayer.State.TRAPPED : MatchPlayer.State.ALIVE;
             assertEquals(expected, match.player(RED_1).state(), "offset=" + offset);
         }
     }

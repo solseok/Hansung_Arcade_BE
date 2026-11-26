@@ -1051,7 +1051,6 @@ public final class Match {
         return null;
     }
 
-    /** 그 칸을 덮은 물줄기. 여럿이면 터진 칸이 가까운 것, 거리가 같으면 늦게 터진 것 (클라이언트 wetOwnersAt과 같은 순서) */
     /**
      * player를 맞힌 물줄기. 맞지 않았으면 null (클라이언트 BattleRules.soakingOwners와 같은 판정).
      *
@@ -1104,6 +1103,7 @@ public final class Match {
         return best;
     }
 
+    /** 그 칸을 덮은 물줄기. 여럿이면 터진 칸이 가까운 것, 거리가 같으면 늦게 터진 것 (클라이언트 wetOwnersAt과 같은 순서) */
     private Flame flameAt(Cell cell, long now) {
         Flame best = null;
         int bestDistance = Integer.MAX_VALUE;
