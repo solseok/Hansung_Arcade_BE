@@ -12,6 +12,12 @@ public final class MatchMessages {
     public static final String PLAYER_MOVED = "PLAYER_MOVED";
     public static final String BALLOON_PLACED = "BALLOON_PLACED";
     public static final String BALLOON_EXPLODED = "BALLOON_EXPLODED";
+    /** 장갑으로 물풍선을 던졌다 (내려앉을 칸이 막혀 더 날아갈 때도) */
+    public static final String BALLOON_THROWN = "BALLOON_THROWN";
+    /** 신발·빨간 악마로 물풍선을 차서 미끄러지기 시작했다 */
+    public static final String BALLOON_KICKED = "BALLOON_KICKED";
+    /** 미끄러지던 물풍선이 멈췄다 */
+    public static final String BALLOON_STOPPED = "BALLOON_STOPPED";
     public static final String PLAYER_TRAPPED = "PLAYER_TRAPPED";
     public static final String PLAYER_RESCUED = "PLAYER_RESCUED";
     public static final String PLAYER_POPPED = "PLAYER_POPPED";
@@ -46,6 +52,28 @@ public final class MatchMessages {
     }
 
     /**
+     * 물풍선이 (col, row)에서 날아올라 flightMs 뒤 (toCol, toRow)에 내려앉는다. 나는 동안은 어느 칸에도 없다.
+     *
+     * @param playerId 던진 사람. 내려앉을 칸이 막혀 같은 쪽으로 더 날아가는 것이면 null
+     * @param direction 나는 방향 UP·DOWN·LEFT·RIGHT
+     */
+    public record BalloonThrown(int balloonId, Long playerId, int col, int row, int toCol, int toRow, String direction,
+                                long flightMs) {
+    }
+
+    /**
+     * 물풍선이 (col, row)에서 direction 쪽으로 미끄러지기 시작했다. 멈추면 BALLOON_STOPPED, 가는 중에 터지면 BALLOON_EXPLODED가 온다.
+     *
+     * @param playerId 찬 사람
+     */
+    public record BalloonKicked(int balloonId, long playerId, int col, int row, String direction) {
+    }
+
+    /** 미끄러지던 물풍선이 (col, row) 칸 가운데에 멈췄다 */
+    public record BalloonStopped(int balloonId, int col, int row) {
+    }
+
+    /**
      * @param items        다 부서진 블럭에서 나온 아이템
      * @param removedItems 물줄기에 맞아 사라진 아이템의 itemId
      */
@@ -61,7 +89,7 @@ public final class MatchMessages {
     public record DroppedItem(int itemId, int col, int row, String item) {
     }
 
-    /** 물줄기가 실제로 뻗은 칸 수 (막히면 짧다) */
+    /** 물줄기가 실제로 뻗은 칸 수 (막히면 짧다). (col, row)는 터진 칸 (미끄러지던 물풍선이면 가운데가 가장 가까운 칸) */
     public record ExplodedBalloon(int balloonId, int col, int row, int up, int down, int left, int right) {
     }
 
