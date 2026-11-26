@@ -1188,6 +1188,7 @@ public final class Match {
      * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 비율표로 정한다.
      * 나올 확률은 경기 인원에 맞춘다 ({@link ItemDrops#dropChanceFor}). 고정 드롭에는 난수를 쓰지 않는다.
      * 액티브 아이템(바늘·보호막·스프링 신발)도 패시브와 똑같이 놓는다.
+     * 탱크는 비율표에 없어서 고정 드롭(캠프 08의 내구도 상자)으로만 나온다.
      */
     private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
         return map.takeFixedDrop(cell.col(), cell.row())
