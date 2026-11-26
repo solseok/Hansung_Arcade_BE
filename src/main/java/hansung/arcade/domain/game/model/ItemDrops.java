@@ -23,10 +23,10 @@ final class ItemDrops {
     static final double DROP_CHANCE = 0.33;
     /** 2명을 넘는 한 명마다 더하는 확률 (8명까지) */
     static final double DROP_CHANCE_PER_EXTRA_PLAYER = 0.04;
-    /** 아이템이 나왔을 때 종류별 비율. 탱크를 뺀 10종의 합이 {@link #TOTAL}이고, 이 순서({@link ItemType} 선언 순서)대로 난수 구간을 나눈다 */
-    static final Map<ItemType, Integer> WEIGHTS = weights();
     /** {@link #WEIGHTS}의 합. 탱크(3)를 뺀 97이다 */
     static final int TOTAL = 97;
+    /** 아이템이 나왔을 때 종류별 비율. 탱크를 뺀 10종의 합이 {@link #TOTAL}이고, 이 순서({@link ItemType} 선언 순서)대로 난수 구간을 나눈다 */
+    static final Map<ItemType, Integer> WEIGHTS = weights();
 
     private ItemDrops() {
     }
