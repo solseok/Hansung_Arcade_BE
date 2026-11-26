@@ -329,15 +329,15 @@ class MatchBalloonThrowKickTest {
         give(match, RED, ItemType.GLOVE);
         give(match, BLUE, ItemType.SHOE);
         placeAt(match, RED, 1, 0, PLAY);
-        placeAt(match, BLUE, 11, 0, PLAY);
+        placeAt(match, BLUE, 9, 0, PLAY);
         stand(match, RED, 1, 0, Facing.RIGHT, PLAY);
-        stand(match, BLUE, 12, 0, Facing.LEFT, PLAY);
+        stand(match, BLUE, 10, 0, Facing.LEFT, PLAY);
         assertEquals(1, throwBalloon(match, RED, 1, 0, Facing.RIGHT, PLAY).size());
-        // 파랑이 찬 물풍선은 (7,0)을 0.35초부터 0.45초까지 지나간다
-        assertEquals(kicked(2, BLUE, 11, 0, Facing.LEFT), kick(match, BLUE, 11, 0, Facing.LEFT, PLAY));
+        // 파랑이 찬 물풍선은 (7,0)을 0.3초부터 0.5초까지 지나간다
+        assertEquals(kicked(2, BLUE, 9, 0, Facing.LEFT), kick(match, BLUE, 9, 0, Facing.LEFT, PLAY));
 
         assertEquals(thrown(1, null, 7, 0, 8, 0, Facing.RIGHT, Match.MIN_FLIGHT_MS), match.tick(PLAY + 360));
-        assertEquals(stopped(2, 0, 0), match.tick(PLAY + 1100), "떠난 (1,0)을 지나 맵 끝 앞에 멈춘다");
+        assertEquals(stopped(2, 0, 0), match.tick(PLAY + 1800), "떠난 (1,0)을 지나 맵 끝 앞에 멈춘다");
     }
 
     @Test
@@ -387,10 +387,10 @@ class MatchBalloonThrowKickTest {
         stand(match, RED, 6, 6, Facing.RIGHT, PLAY);
         placeAt(match, BLUE, 2, 5, PLAY);
         stand(match, BLUE, 1, 5, Facing.RIGHT, PLAY);
-        // 파랑 물풍선은 0.45초에 (7,5)로 넘어간다. 그 뒤 타이머가 돌기 전에 빨강이 가시 면 앞 (7,6) 물풍선을 찬다
+        // 파랑 물풍선은 0.9초에 (7,5)로 넘어간다. 그 뒤 타이머가 돌기 전에 빨강이 가시 면 앞 (7,6) 물풍선을 찬다
         assertEquals(1, kick(match, BLUE, 2, 5, Facing.RIGHT, PLAY).size());
 
-        List<MatchEvent> events = kick(match, RED, 7, 6, Facing.RIGHT, PLAY + 460);
+        List<MatchEvent> events = kick(match, RED, 7, 6, Facing.RIGHT, PLAY + 910);
 
         assertEquals(List.of(new ExplodedBalloon(1, 7, 6, 0, 1, 1, 0), new ExplodedBalloon(2, 7, 5, 1, 0, 1, 1)),
                 exploded(events).balloons());
@@ -415,15 +415,16 @@ class MatchBalloonThrowKickTest {
     // ---------------------------------------------------------------- 차기
 
     @Test
-    void 신발이_있으면_막힌_앞_칸의_물풍선을_차서_한_칸에_0점1초씩_맵_끝_앞까지_미끄러뜨리고_멈추면_BALLOON_STOPPED를_보낸다() {
+    void 신발이_있으면_막힌_앞_칸의_물풍선을_차서_한_칸에_0점2초씩_맵_끝_앞까지_미끄러뜨리고_멈추면_BALLOON_STOPPED를_보낸다() {
         Match match = playing();
         give(match, RED, ItemType.SHOE);
-        placeAt(match, RED, 2, 0, PLAY);
-        stand(match, RED, 1, 0, Facing.RIGHT, PLAY);
+        placeAt(match, RED, 5, 0, PLAY);
+        stand(match, RED, 4, 0, Facing.RIGHT, PLAY);
 
-        assertEquals(kicked(1, RED, 2, 0, Facing.RIGHT), kick(match, RED, 2, 0, Facing.RIGHT, PLAY));
-        assertEquals(List.of(), match.tick(PLAY + 999));
-        assertEquals(stopped(1, 12, 0), match.tick(PLAY + 10 * Match.BALLOON_SLIDE_MS_PER_TILE));
+        assertEquals(kicked(1, RED, 5, 0, Facing.RIGHT), kick(match, RED, 5, 0, Facing.RIGHT, PLAY));
+        assertEquals(200, Match.BALLOON_SLIDE_MS_PER_TILE);
+        assertEquals(List.of(), match.tick(PLAY + 1399));
+        assertEquals(stopped(1, 12, 0), match.tick(PLAY + 7 * Match.BALLOON_SLIDE_MS_PER_TILE));
         assertEquals(List.of(new ExplodedBalloon(1, 12, 0, 0, 1, 1, 0)),
                 exploded(match.tick(PLAY + Match.FUSE_MS)).balloons());
     }
@@ -437,8 +438,8 @@ class MatchBalloonThrowKickTest {
         stand(match, BLUE, 6, 4, Facing.DOWN, PLAY);
 
         assertEquals(1, kick(match, RED, 2, 4, Facing.RIGHT, PLAY).size());
-        assertEquals(List.of(), match.tick(PLAY + 699));
-        assertEquals(stopped(1, 9, 4), match.tick(PLAY + 700), "(10,4)는 석상이다");
+        assertEquals(List.of(), match.tick(PLAY + 1399));
+        assertEquals(stopped(1, 9, 4), match.tick(PLAY + 1400), "(10,4)는 석상이다");
     }
 
     @Test
@@ -453,8 +454,8 @@ class MatchBalloonThrowKickTest {
         stand(match, BLUE, 12, 5, Facing.DOWN, PLAY);
 
         assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY).size());
-        assertEquals(List.of(), match.tick(PLAY + 400), "(6,0) 물풍선 위를 지나는 중");
-        assertEquals(stopped(3, 11, 0), match.tick(PLAY + 900));
+        assertEquals(List.of(), match.tick(PLAY + 800), "(6,0) 물풍선 위를 지나는 중");
+        assertEquals(stopped(3, 11, 0), match.tick(PLAY + 1800));
     }
 
     @Test
@@ -510,8 +511,8 @@ class MatchBalloonThrowKickTest {
         stand(match, RED, 1, 6, Facing.RIGHT, PLAY);
         assertEquals(1, kick(match, RED, 2, 6, Facing.RIGHT, PLAY).size());
 
-        assertEquals(List.of(), match.tick(PLAY + 499));
-        List<MatchEvent> events = match.tick(PLAY + 500);
+        assertEquals(List.of(), match.tick(PLAY + 999));
+        List<MatchEvent> events = match.tick(PLAY + 1000);
         assertEquals(List.of(MatchMessages.BALLOON_EXPLODED), types(events));
         BalloonExploded exploded = exploded(events);
         assertEquals(List.of(new ExplodedBalloon(1, 7, 6, 1, 1, 1, 0)), exploded.balloons());
@@ -548,8 +549,8 @@ class MatchBalloonThrowKickTest {
         give(match, RED, ItemType.SHOE);
         placeAt(match, RED, 2, 0, PLAY);
         stand(match, RED, 1, 0, Facing.RIGHT, PLAY);
-        // 1.76초에 차면 (3,0)·(4,0)을 지나 2.01초에 (5,0)으로 넘어간다. 퓨즈는 2초에 다 된다
-        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1760).size());
+        // 1.51초에 차면 (3,0)을 지나 1.81초에 (4,0)에, 2.01초에 (5,0)으로 넘어간다. 퓨즈는 2초에 다 된다
+        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1510).size());
 
         List<MatchEvent> events = match.tick(PLAY + 2030);
         assertEquals(List.of(MatchMessages.BALLOON_EXPLODED), types(events), "멈추지 않았으므로 BALLOON_STOPPED가 없다");
@@ -564,13 +565,13 @@ class MatchBalloonThrowKickTest {
         stand(match, BLUE, 12, 11, Facing.DOWN, PLAY);
         placeAt(match, RED, 2, 0, PLAY + 1000);
         stand(match, RED, 1, 0, Facing.RIGHT, PLAY + 1000);
-        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1700).size());
+        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1400).size());
 
-        // 2초에 파랑 물풍선이 터질 때 찬 물풍선은 (5,0) 가운데라 물줄기에 닿지 않는다
+        // 2초에 파랑 물풍선이 터질 때 찬 물풍선은 (5,0) 가운데라 물줄기에 닿지 않는다. 2.1초에 (6,0)으로 넘어간다
         assertEquals(List.of(new ExplodedBalloon(1, 6, 1, 1, 1, 1, 1)),
                 exploded(match.tick(PLAY + Match.FUSE_MS)).balloons());
-        assertEquals(List.of(), match.tick(PLAY + 2049));
-        assertEquals(List.of(new ExplodedBalloon(2, 6, 0, 0, 1, 1, 1)), exploded(match.tick(PLAY + 2050)).balloons());
+        assertEquals(List.of(), match.tick(PLAY + 2099));
+        assertEquals(List.of(new ExplodedBalloon(2, 6, 0, 0, 1, 1, 1)), exploded(match.tick(PLAY + 2100)).balloons());
     }
 
     @Test
@@ -581,8 +582,8 @@ class MatchBalloonThrowKickTest {
         stand(match, RED, 1, 8, Facing.RIGHT, PLAY);
         assertEquals(1, kick(match, RED, 2, 8, Facing.RIGHT, PLAY).size());
 
-        assertEquals(List.of(), match.tick(PLAY + 349));
-        assertEquals(List.of(new ExplodedBalloon(1, 6, 8, 1, 1, 1, 1)), exploded(match.tick(PLAY + 350)).balloons());
+        assertEquals(List.of(), match.tick(PLAY + 699));
+        assertEquals(List.of(new ExplodedBalloon(1, 6, 8, 1, 1, 1, 1)), exploded(match.tick(PLAY + 700)).balloons());
     }
 
     @Test
@@ -593,8 +594,8 @@ class MatchBalloonThrowKickTest {
         stand(match, BLUE, 12, 11, Facing.DOWN, PLAY);
         placeAt(match, RED, 2, 0, PLAY + 1000);
         stand(match, RED, 1, 0, Facing.RIGHT, PLAY + 1000);
-        // 1.64초에 차면 1.99초에 (6,0)으로 넘어간다
-        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1640).size());
+        // 1.29초에 차면 1.99초에 (6,0)으로 넘어간다
+        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1290).size());
 
         assertEquals(List.of(new ExplodedBalloon(1, 6, 1, 0, 1, 1, 1), new ExplodedBalloon(2, 6, 0, 0, 0, 1, 1)),
                 exploded(match.tick(PLAY + Match.FUSE_MS)).balloons());
@@ -608,8 +609,8 @@ class MatchBalloonThrowKickTest {
         stand(match, RED, 1, 0, Facing.RIGHT, PLAY);
         placeAt(match, BLUE, 6, 0, PLAY + 500);
         stand(match, BLUE, 12, 11, Facing.DOWN, PLAY + 500);
-        // 1.6초에 차면 1.95초부터 2.05초까지 (6,0) 파랑 물풍선 위를 지난다. 빨강 물풍선의 퓨즈는 2초에 다 된다
-        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1600).size());
+        // 1.2초에 차면 1.9초부터 2.1초까지 (6,0) 파랑 물풍선 위를 지난다. 빨강 물풍선의 퓨즈는 2초에 다 된다
+        assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY + 1200).size());
 
         assertEquals(List.of(new ExplodedBalloon(1, 6, 0, 0, 1, 1, 1), new ExplodedBalloon(2, 6, 0, 0, 1, 1, 1)),
                 exploded(match.tick(PLAY + Match.FUSE_MS)).balloons());
@@ -627,22 +628,22 @@ class MatchBalloonThrowKickTest {
         stand(match, BLUE, 9, 8, Facing.DOWN, PLAY + 300);
         assertEquals(List.of(new MatchEvent(EVERYONE, MatchMessages.BOX_MOVED, new BoxMoved(9, 9, 9, 10))),
                 match.pushBox(CONN_BLUE, BLUE, 9, 9, Facing.DOWN, PLAY + 300));
-        assertEquals(stopped(1, 8, 10), match.tick(PLAY + 600));
+        assertEquals(stopped(1, 8, 10), match.tick(PLAY + 1200));
     }
 
     @Test
     void 미끄러지는_물풍선이_막_들어가려는_칸으로는_상자를_밀지_않는다() {
         Match match = playing();
         give(match, RED, ItemType.SHOE);
-        placeAt(match, RED, 2, 10, PLAY);
-        stand(match, RED, 1, 10, Facing.RIGHT, PLAY);
-        assertEquals(1, kick(match, RED, 2, 10, Facing.RIGHT, PLAY).size());
+        placeAt(match, RED, 5, 10, PLAY);
+        stand(match, RED, 4, 10, Facing.RIGHT, PLAY);
+        assertEquals(1, kick(match, RED, 5, 10, Facing.RIGHT, PLAY).size());
 
         // 0.6초에 (8,10) 가운데를 떠나 (9,10)으로 가는 중
         assertEquals(List.of(), match.tick(PLAY + 610));
         stand(match, BLUE, 9, 8, Facing.DOWN, PLAY + 610);
         assertEquals(List.of(), match.pushBox(CONN_BLUE, BLUE, 9, 9, Facing.DOWN, PLAY + 610));
-        assertEquals(stopped(1, 12, 10), match.tick(PLAY + 1000));
+        assertEquals(stopped(1, 12, 10), match.tick(PLAY + 1400));
     }
 
     @Test
@@ -656,9 +657,9 @@ class MatchBalloonThrowKickTest {
         match.tick(PLAY + 10);
         stand(match, BLUE, 3, 1, Facing.UP, PLAY + 10);
         assertEquals(List.of(), match.placeBalloon(CONN_BLUE, BLUE, 3, 0, PLAY + 10));
-        match.tick(PLAY + 60);
-        stand(match, BLUE, 2, 1, Facing.UP, PLAY + 60);
-        assertEquals(List.of(MatchMessages.BALLOON_PLACED), types(match.placeBalloon(CONN_BLUE, BLUE, 2, 0, PLAY + 60)));
+        match.tick(PLAY + 110);
+        stand(match, BLUE, 2, 1, Facing.UP, PLAY + 110);
+        assertEquals(List.of(MatchMessages.BALLOON_PLACED), types(match.placeBalloon(CONN_BLUE, BLUE, 2, 0, PLAY + 110)));
     }
 
     @Test
@@ -671,13 +672,13 @@ class MatchBalloonThrowKickTest {
         stand(match, RED, 1, 0, Facing.RIGHT, PLAY);
         assertEquals(1, kick(match, RED, 2, 0, Facing.RIGHT, PLAY).size());
 
-        // 0.85초에 (11,0)으로 넘어가 0.9초에 가운데에 온다. 그 사이 마지막 빈 칸 (12,0)에 파랑이 물풍선을 놓는다
-        assertEquals(List.of(), match.tick(PLAY + 870));
-        stand(match, BLUE, 12, 1, Facing.UP, PLAY + 870);
-        assertEquals(List.of(MatchMessages.BALLOON_PLACED), types(match.placeBalloon(CONN_BLUE, BLUE, 12, 0, PLAY + 870)));
-        stand(match, BLUE, 12, 3, Facing.UP, PLAY + 870);
+        // 1.7초에 (11,0)으로 넘어가 1.8초에 가운데에 온다. 그 사이 마지막 빈 칸 (12,0)에 파랑이 물풍선을 놓는다
+        assertEquals(List.of(), match.tick(PLAY + 1720));
+        stand(match, BLUE, 12, 1, Facing.UP, PLAY + 1720);
+        assertEquals(List.of(MatchMessages.BALLOON_PLACED), types(match.placeBalloon(CONN_BLUE, BLUE, 12, 0, PLAY + 1720)));
+        stand(match, BLUE, 12, 3, Facing.UP, PLAY + 1720);
 
-        List<MatchEvent> events = match.tick(PLAY + 900);
+        List<MatchEvent> events = match.tick(PLAY + 1800);
         assertEquals(List.of(MatchMessages.BALLOON_EXPLODED), types(events));
         assertEquals(List.of(1, 2, 3), exploded(events).balloons().stream().map(ExplodedBalloon::balloonId).sorted()
                 .toList());
