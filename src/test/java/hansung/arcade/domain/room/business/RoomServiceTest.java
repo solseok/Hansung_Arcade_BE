@@ -2796,9 +2796,34 @@ class RoomServiceTest {
     }
 
     @Test
+    void 팀전에_고른_적_없이_들어온_사람은_사람이_적은_색으로_번갈아_앉는다() {
+        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
+        rooms.changeMap(1, "patrit/patrit14", reply(1));
+        rooms.join(2, one(2, "둘"), 1, reply(2));
+        rooms.join(3, two(3, "셋", "넷"), 1, reply(3));
+        rooms.join(4, one(4, "다섯"), 1, reply(4));
+
+        JsonNode state = last(1, "ROOM_STATE");
+        List<String> colors = new ArrayList<>();
+        state.get("players").forEach(p -> colors.add(p.get("team").asText()));
+        assertEquals(List.of("RED", "BLUE", "YELLOW", "GREEN", "RED"), colors);
+    }
+
+    @Test
+    void 개인전에_고른_적_없이_들어온_사람은_예전처럼_빨강이다() {
+        rooms.create(1, one(1, "방장"), "개인전", 8, reply(1));
+        rooms.join(2, one(2, "손님"), 1, reply(2));
+
+        JsonNode state = last(1, "ROOM_STATE");
+        assertEquals("RED", player(state, "방장").get("team").asText());
+        assertEquals("RED", player(state, "손님").get("team").asText());
+    }
+
+    @Test
     void 팀전_방도_두_팀이어야_시작할_수_있다() {
         rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
         rooms.join(2, one(2, "손님"), 1, reply(2));
+        rooms.selectTeam(2, "RED");
         rooms.ready(2, true);
 
         assertCode("ONE_TEAM", () -> rooms.startGame(1, reply(1)));

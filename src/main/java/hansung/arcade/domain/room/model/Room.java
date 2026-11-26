@@ -103,6 +103,7 @@ public final class Room {
         List<Team> allowed = mode.teamsFor(mapId);
         return Arrays.stream(Team.values()).filter(allowed::contains).toList();
     }
+
     /**
      * 열린 자리 수.
      */
@@ -179,7 +180,11 @@ public final class Room {
         return seat(connection, players, player -> character, player -> team);
     }
 
-    /** 플레이어마다 다른 캐릭터·팀으로 앉힌다 (1P·2P가 마지막으로 고른 값) */
+    /**
+     * 플레이어마다 다른 캐릭터·팀으로 앉힌다 (1P·2P가 마지막으로 고른 값).
+     * 팀이 null(고른 적 없음)이면 개인전은 빨강, 팀전은 사람이 가장 적은 색으로 앉힌다.
+     * 고를 수 없는 색이어도 사람이 가장 적은 색으로 앉힌다.
+     */
     public List<RoomMember> seat(long connection, List<Player> players, Function<Player, String> character,
                                  Function<Player, Team> team) {
         if (players.isEmpty()) {
@@ -192,7 +197,8 @@ public final class Room {
         for (Player p : players) {
             int slot = firstOpenEmptySlot();
             Team wanted = team.apply(p);
-            Team seatedTeam = teams().contains(wanted) ? wanted : spareTeam(p.playerId());
+            Team seatedTeam = wanted != null && teams().contains(wanted) ? wanted
+                    : mode == RoomMode.SOLO && wanted == null ? Team.RED : spareTeam(p.playerId());
             RoomMember m = new RoomMember(p.playerId(), connection, p.nickname(), slot, character.apply(p), seatedTeam,
                     false);
             seats.put(slot, m);
@@ -268,8 +274,8 @@ public final class Room {
     }
 
     /**
-     * 고를 수 없는 색을 가진 playerId인 사람에게 줄 색: 다른 사람이 가장 적은 색, 같으면 {@link RoomMode#teamsFor} 순서
-     * (팀전은 빨강, 파랑, 노랑, 초록)다. 그래서 처음 들어온 두 사람은 빨강·파랑으로 나뉜다.
+     * 색을 정해 줘야 하는 playerId인 사람에게 줄 색: 다른 사람이 가장 적은 색, 같으면 {@link RoomMode#teamsFor} 순서
+     * (팀전은 빨강, 파랑, 노랑, 초록)다. 그래서 팀전에 고른 적 없이 들어온 사람들은 빨강·파랑(·노랑·초록)으로 번갈아 나뉜다.
      */
     private Team spareTeam(long playerId) {
         List<RoomMember> others = seats.values().stream().filter(m -> m.playerId() != playerId).toList();
@@ -334,8 +340,10 @@ public final class Room {
      * 자리 순서대로 한 명씩 옮겨, 옮긴 사람도 다음 사람의 "사람이 가장 적은 색"에 센다.
      */
     private void moveOffDisallowedTeams() {
-        for (RoomMember m : members()) {
-            if (!teams().contains(m.team())) {
+        for (RoomMember before : members()) {
+            if (!teams().contains(before.team())) {
+                // 앞에서 같은 연결의 준비를 풀었을 수 있으니 지금 값에서 바꾼다
+                RoomMember m = seats.get(before.slot());
                 seats.put(m.slot(), m.withTeam(spareTeam(m.playerId())));
                 seats.replaceAll((s, other) -> other.connectionId() == m.connectionId() ? other.withReady(false) : other);
             }

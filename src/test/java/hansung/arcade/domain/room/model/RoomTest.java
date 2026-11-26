@@ -599,6 +599,28 @@ class RoomTest {
     }
 
     @Test
+    void 팀전에서_캠프08이_아닌_맵으로_바꾸면_아무도_옮기지_않는다() {
+        Room room = new Room(1, "a", 8, RoomMode.TEAM);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        room.seat(200, players(2), "kkukku", Team.RED);
+        room.ready(200, true);
+
+        room.changeMap("patrit/patrit14");
+
+        assertEquals(List.of(Team.RED, Team.RED), teamsOf(room));
+        assertTrue(room.members().get(1).ready());
+    }
+
+    @Test
+    void 팀전에서_고른_적_없는_사람은_사람이_적은_색으로_앉는다() {
+        Room room = new Room(1, "a", 8, RoomMode.TEAM);
+
+        room.seat(100, players(1, 2, 3), "kkukku", (Team) null);
+
+        assertEquals(List.of(Team.RED, Team.BLUE, Team.RED), teamsOf(room));
+    }
+
+    @Test
     void 개인전은_맵을_바꿔도_팀_색을_옮기지_않는다() {
         Room room = new Room(1, "a", 8);
         room.changeMap("patrit/patrit14");

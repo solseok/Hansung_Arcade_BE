@@ -199,12 +199,13 @@ public final class RoomService {
             try {
                 changed = room.selectTeam(connection, playerId, team);
             } catch (IllegalStateException e) {
-                throw switch (e.getMessage()) {
-                    case TEAM_NOT_ALLOWED -> error(TEAM_NOT_ALLOWED, room.mapId().equals("camp/camp08")
-                            ? "캠프 08 팀전에서는 빨강·파랑만 고를 수 있습니다."
-                            : "팀전에서는 빨강·파랑·노랑·초록만 고를 수 있습니다.");
-                    default -> e;
-                };
+                if (!TEAM_NOT_ALLOWED.equals(e.getMessage())) {
+                    throw e;
+                }
+                // 팀전 색은 4색, 진영이 둘인 캠프 08만 2색이다 (RoomMode.teamsFor)
+                throw error(TEAM_NOT_ALLOWED, room.teams().size() == 2
+                        ? "캠프 08 팀전에서는 빨강·파랑만 고를 수 있습니다."
+                        : "팀전에서는 빨강·파랑·노랑·초록만 고를 수 있습니다.");
             }
             // 고를 수 있었던 색만 기억한다. 앉을 때 쓸 수 없는 색이면 방이 다시 바꿔 앉힌다
             remember(teams, room, connection, playerId, team);
@@ -399,7 +400,7 @@ public final class RoomService {
         Map<Long, Team> lastTeams = teams.getOrDefault(connection, Map.of());
         List<RoomMember> added = room.seat(connection, players,
                 player -> lastCharacters.getOrDefault(player.playerId(), "sangsangbugi"),
-                player -> lastTeams.getOrDefault(player.playerId(), Team.RED));
+                player -> lastTeams.get(player.playerId()));
         memberships.put(connection, room);
         return added;
     }
