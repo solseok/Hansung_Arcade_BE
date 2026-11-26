@@ -110,8 +110,8 @@ public final class Match {
     static final long FLIGHT_MS_PER_TILE = 60;
     /** 아주 가까이 내려앉아도 이만큼은 난다 (클라이언트 BalloonField.MIN_FLIGHT_SECONDS) */
     static final long MIN_FLIGHT_MS = 200;
-    /** 찬 물풍선이 한 칸을 미끄러지는 시간. 초당 10칸이다 (클라이언트 BalloonField.SLIDE_TILES_PER_SECOND) */
-    static final long BALLOON_SLIDE_MS_PER_TILE = 100;
+    /** 찬 물풍선이 한 칸을 미끄러지는 시간. 초당 5칸이다 (클라이언트 BalloonField.SLIDE_TILES_PER_SECOND) */
+    static final long BALLOON_SLIDE_MS_PER_TILE = 200;
     /** 미끄러지는 물풍선이 칸 가운데에서 칸 경계까지, 또는 칸 경계에서 다음 칸 가운데까지 가는 시간 */
     private static final long HALF_SLIDE_MS = BALLOON_SLIDE_MS_PER_TILE / 2;
 
