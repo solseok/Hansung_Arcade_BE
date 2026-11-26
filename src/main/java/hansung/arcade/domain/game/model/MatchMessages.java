@@ -140,8 +140,12 @@ public final class MatchMessages {
     public record ItemScattered(long playerId, int col, int row, List<DroppedItem> items) {
     }
 
-    /** @param heading 나는 방향. RIGHT(왼쪽에서 오른쪽) 또는 LEFT */
-    public record AirplaneAppeared(int airplaneId, String heading) {
+    /**
+     * @param heading 나는 방향. RIGHT(왼쪽에서 오른쪽) 또는 LEFT
+     * @param row     지나가는 줄. 이 비행기의 ITEM_DROPPED는 모두 이 줄이다. 떨어뜨리는 자리(비행기 배)는 이 줄의 위쪽 끝
+     *                (맵 y = row × 40)을 난다 ({@link AirDrop#DROP_HEIGHT})
+     */
+    public record AirplaneAppeared(int airplaneId, String heading, int row) {
     }
 
     /**
@@ -150,8 +154,8 @@ public final class MatchMessages {
      * 그래도 클라이언트는 닿는 순간 내 플레이어가 그 칸에 있으면 ITEM_PICKUP을 보낸다. 통신 지연으로 서버가 닿을 때 칸이
      * 비어 보였던 경우를 메우고, 서버가 이미 먹였으면 조용히 버린다 (Notion ITEM_DROPPED).
      *
-     * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 클라이언트는 떨어지는 그림에, 서버는 닿는 순간(보낸 시각 + fallMs)을
-     *               정하는 데 쓴다
+     * @param fallMs 비행기 배에서 칸까지 떨어지는 시간. 지금은 늘 {@link AirDrop#FALL_MS}(129ms)다.
+     *               클라이언트는 떨어지는 그림에, 서버는 닿는 순간(보낸 시각 + fallMs)을 정하는 데 쓴다
      */
     public record ItemDropped(int airplaneId, int itemId, int col, int row, String item, long fallMs) {
     }

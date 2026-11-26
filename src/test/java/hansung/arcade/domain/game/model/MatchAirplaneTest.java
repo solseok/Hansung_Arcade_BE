@@ -11,13 +11,14 @@ import java.util.SplittableRandom;
 import java.util.random.RandomGenerator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 남은 시간에 맞춰 비행기가 나오고(AIRPLANE_APPEARED), 지나가며 빈 칸에 아이템을 떨어뜨리는지(ITEM_DROPPED) */
 class MatchAirplaneTest {
 
     /*
-     * 7×3 맵(21칸, 칸 번호 = row × 7 + col). (0,0)은 고정 드롭 물풍선이 있는 블럭, (1,0)은 덤불, 나머지는 빈 바닥.
+     * 7×3 맵. (0,0)은 고정 드롭 물풍선이 있는 블럭, (1,0)은 덤불, 나머지는 빈 바닥.
      * 1P(0,2)는 빨강(연결 1), 2P(6,2)는 파랑(연결 2). 두 명이라 막힌 칸도 다시 뽑지 않는다.
      * 세 명 경기면 3P(6,0)가 빨강(연결 3)이다
      */
@@ -38,7 +39,8 @@ class MatchAirplaneTest {
             "b......",
             ".......",
             ".......");
-    private static final int CELLS = 21;
+    private static final int COLUMNS = 7;
+    private static final int ROWS = 3;
 
     private static final long RED = 1;
     private static final long BLUE = 2;
@@ -93,14 +95,16 @@ class MatchAirplaneTest {
     }
 
     /**
-     * 비행기 한 대가 고를 두 칸과 아이템을 정하는 난수. second는 first보다 뒤 칸이어야 한다
-     * (남은 칸 가운데 고르므로 앞서 고른 칸을 건너뛴 번호가 된다)
+     * 비행기 한 대가 지나갈 줄과 그 줄에서 고를 두 칸·아이템을 정하는 난수. 두 칸은 같은 줄이어야 한다.
+     * 둘째 칸은 남은 열 가운데 고르므로, 첫째 칸보다 오른쪽이면 첫째 칸을 건너뛴 번호가 된다
      */
     private static double[] plan(Cell first, ItemType firstItem, Cell second, ItemType secondItem) {
-        int a = first.row() * 7 + first.col();
-        int b = second.row() * 7 + second.col();
-        assertTrue(b > a, "둘째 칸이 첫째 칸보다 뒤여야 합니다");
-        return new double[]{(a + 0.5) / CELLS, cargo(firstItem), (b - 1 + 0.5) / (CELLS - 1), cargo(secondItem)};
+        assertEquals(first.row(), second.row(), "두 칸은 비행기가 지나가는 같은 줄이어야 합니다");
+        assertNotEquals(first.col(), second.col(), "두 칸은 서로 다른 열이어야 합니다");
+        int a = first.col();
+        int b = second.col() > a ? second.col() - 1 : second.col();
+        return new double[]{(first.row() + 0.5) / ROWS, (a + 0.5) / COLUMNS, cargo(firstItem),
+                (b + 0.5) / (COLUMNS - 1), cargo(secondItem)};
     }
 
     /** AirDrop.CARGO에서 item을 고르는 난수 */
@@ -139,9 +143,15 @@ class MatchAirplaneTest {
         return FIRST + AirDrop.passMs(map, Facing.RIGHT, col);
     }
 
-    /** 첫 비행기가 지나는 tick에 (col, row)로 떨어뜨린 아이템이 칸에 닿는 시각 */
-    private long lands(int col, int row) {
-        return firstPass(col) + AirDrop.fallMs(row);
+    /** 첫 비행기가 지나는 tick에 col 열로 떨어뜨린 아이템이 칸에 닿는 시각 */
+    private long lands(int col) {
+        return firstPass(col) + AirDrop.FALL_MS;
+    }
+
+    /** AIRPLANE_APPEARED마다 "airplaneId heading" */
+    private static List<String> flights(List<MatchEvent> events) {
+        return bodies(events, MatchMessages.AIRPLANE_APPEARED, AirplaneAppeared.class).stream()
+                .map(appeared -> appeared.airplaneId() + " " + appeared.heading()).toList();
     }
 
     @Test
@@ -149,18 +159,17 @@ class MatchAirplaneTest {
         Match match = playing(new SplittableRandom(20261124));
         List<AirplaneAppeared> appeared = new ArrayList<>();
 
-        assertEquals(List.of(), bodies(match.tick(FIRST - 1), MatchMessages.AIRPLANE_APPEARED, AirplaneAppeared.class));
+        assertEquals(List.of(), flights(match.tick(FIRST - 1)));
         for (long remaining : AirDrop.APPEARANCES_MS) {
             appeared.addAll(bodies(match.tick(ENDS_AT - remaining), MatchMessages.AIRPLANE_APPEARED,
                     AirplaneAppeared.class));
         }
 
-        assertEquals(List.of(new AirplaneAppeared(1, "RIGHT"), new AirplaneAppeared(2, "LEFT"),
-                new AirplaneAppeared(3, "RIGHT"), new AirplaneAppeared(4, "LEFT"),
-                new AirplaneAppeared(5, "RIGHT"), new AirplaneAppeared(6, "LEFT")), appeared);
+        assertEquals(List.of("1 RIGHT", "2 LEFT", "3 RIGHT", "4 LEFT", "5 RIGHT", "6 LEFT"),
+                appeared.stream().map(flight -> flight.airplaneId() + " " + flight.heading()).toList());
+        assertTrue(appeared.stream().allMatch(flight -> flight.row() >= 0 && flight.row() < ROWS));
         // 마지막 출현(0:07) 뒤로는 더 나오지 않는다
-        assertEquals(List.of(), bodies(match.tick(ENDS_AT - 1), MatchMessages.AIRPLANE_APPEARED,
-                AirplaneAppeared.class));
+        assertEquals(List.of(), flights(match.tick(ENDS_AT - 1)));
     }
 
     @Test
@@ -168,20 +177,17 @@ class MatchAirplaneTest {
         Match match = playing(new SplittableRandom(20261124));
 
         // 첫 출현(1:59)을 0.999초 늦게 처리하면 띄운다
-        assertEquals(List.of(new AirplaneAppeared(1, "RIGHT")), bodies(match.tick(FIRST + AirDrop.LATE_SKIP_MS - 1),
-                MatchMessages.AIRPLANE_APPEARED, AirplaneAppeared.class));
+        assertEquals(List.of("1 RIGHT"), flights(match.tick(FIRST + AirDrop.LATE_SKIP_MS - 1)));
         // 1:36과 1:14를 지나 1:14 바로 다음에야 처리하면 1:36은 건너뛰고 1:14만 띄운다
         long third = ENDS_AT - AirDrop.APPEARANCES_MS.get(2);
-        assertEquals(List.of(new AirplaneAppeared(2, "LEFT")), bodies(match.tick(third),
-                MatchMessages.AIRPLANE_APPEARED, AirplaneAppeared.class));
+        assertEquals(List.of("2 LEFT"), flights(match.tick(third)));
     }
 
     @Test
     void 출현_시각보다_딱_1초_늦으면_건너뛴다() {
         Match match = playing(new SplittableRandom(20261124));
 
-        assertEquals(List.of(), bodies(match.tick(FIRST + AirDrop.LATE_SKIP_MS), MatchMessages.AIRPLANE_APPEARED,
-                AirplaneAppeared.class));
+        assertEquals(List.of(), flights(match.tick(FIRST + AirDrop.LATE_SKIP_MS)));
     }
 
     @Test
@@ -190,11 +196,13 @@ class MatchAirplaneTest {
         Match match = playing(random);
         List<MatchEvent> appeared = match.tick(FIRST);
         assertTrue(random.isUsedUp());
+        assertEquals(List.of(new AirplaneAppeared(1, "RIGHT", 1)),
+                bodies(appeared, MatchMessages.AIRPLANE_APPEARED, AirplaneAppeared.class));
 
         assertEquals(List.of(), drops(match.tick(firstPass(3) - 1)));
         List<MatchEvent> first = match.tick(firstPass(3));
-        assertEquals(List.of(new ItemDropped(1, 1, 3, 1, "bubble", AirDrop.fallMs(1))), drops(first));
-        assertEquals(List.of(new ItemDropped(1, 2, 5, 1, "fluid", AirDrop.fallMs(1))), drops(match.tick(firstPass(5))));
+        assertEquals(List.of(new ItemDropped(1, 1, 3, 1, "bubble", AirDrop.FALL_MS)), drops(first));
+        assertEquals(List.of(new ItemDropped(1, 2, 5, 1, "fluid", AirDrop.FALL_MS)), drops(match.tick(firstPass(5))));
         assertEquals(List.of(CONN_RED, CONN_BLUE), appeared.get(0).recipients());
         assertEquals(List.of(CONN_RED, CONN_BLUE), first.get(0).recipients());
     }
@@ -211,24 +219,26 @@ class MatchAirplaneTest {
     }
 
     @Test
-    void 같은_열의_두_칸은_같은_순간_고른_순서대로_떨어뜨린다() {
-        Match match = playing(new ScriptedRandom(plan(new Cell(3, 0), ItemType.SHOE, new Cell(3, 2), ItemType.FLUID)));
-        match.tick(FIRST);
+    void 비행기가_지나가는_줄에만_떨어뜨린다() {
+        // 아랫줄(2)을 지나는 비행기. 지나가는 줄을 AIRPLANE_APPEARED로 알리고, 떨어뜨리는 칸도 모두 그 줄이다
+        Match match = playing(new ScriptedRandom(plan(new Cell(4, 2), ItemType.SHOE, new Cell(1, 2), ItemType.FLUID)));
 
-        assertEquals(List.of(new ItemDropped(1, 1, 3, 0, "shoe", AirDrop.fallMs(0)),
-                new ItemDropped(1, 2, 3, 2, "fluid", AirDrop.fallMs(2))), drops(match.tick(firstPass(3))));
+        assertEquals(List.of(new AirplaneAppeared(1, "RIGHT", 2)),
+                bodies(match.tick(FIRST), MatchMessages.AIRPLANE_APPEARED, AirplaneAppeared.class));
+        assertEquals(List.of(new ItemDropped(1, 1, 1, 2, "fluid", AirDrop.FALL_MS),
+                new ItemDropped(1, 2, 4, 2, "shoe", AirDrop.FALL_MS)), drops(match.tick(firstPass(6))));
     }
 
     @Test
     void 한_tick에_여러_칸을_지나치면_지나간_순서대로_떨어뜨린다() {
-        // 오른쪽으로 나는 비행기는 (5,0)보다 (2,2)를 먼저 지난다. 고른 순서와 반대다
-        Match match = playing(new ScriptedRandom(plan(new Cell(5, 0), ItemType.SHOE, new Cell(2, 2), ItemType.BUBBLE)));
+        // 오른쪽으로 나는 비행기는 (5,1)보다 (2,1)을 먼저 지난다. 고른 순서와 반대다
+        Match match = playing(new ScriptedRandom(plan(new Cell(5, 1), ItemType.SHOE, new Cell(2, 1), ItemType.BUBBLE)));
         match.tick(FIRST);
 
         List<ItemDropped> dropped = drops(match.tick(firstPass(6)));
 
-        assertEquals(List.of(new ItemDropped(1, 1, 2, 2, "bubble", AirDrop.fallMs(2)),
-                new ItemDropped(1, 2, 5, 0, "shoe", AirDrop.fallMs(0))), dropped);
+        assertEquals(List.of(new ItemDropped(1, 1, 2, 1, "bubble", AirDrop.FALL_MS),
+                new ItemDropped(1, 2, 5, 1, "shoe", AirDrop.FALL_MS)), dropped);
     }
 
     @Test
@@ -239,7 +249,7 @@ class MatchAirplaneTest {
 
         List<ItemDropped> dropped = drops(match.tick(firstPass(6)));
 
-        assertEquals(List.of(new ItemDropped(1, 1, 1, 0, "shoe", AirDrop.fallMs(0))), dropped);
+        assertEquals(List.of(new ItemDropped(1, 1, 1, 0, "shoe", AirDrop.FALL_MS)), dropped);
     }
 
     @Test
@@ -252,7 +262,7 @@ class MatchAirplaneTest {
 
         List<ItemDropped> dropped = drops(match.tick(firstPass(5)));
 
-        assertEquals(List.of(new ItemDropped(1, 1, 5, 1, "fluid", AirDrop.fallMs(1))), dropped);
+        assertEquals(List.of(new ItemDropped(1, 1, 5, 1, "fluid", AirDrop.FALL_MS)), dropped);
     }
 
     @Test
@@ -269,7 +279,7 @@ class MatchAirplaneTest {
 
         // 지나가는 순간의 칸을 본다. 물줄기(0.45초)는 아직 남아 있다
         assertEquals(List.of(), drops(match.tick(firstPass(3))));
-        assertEquals(List.of(new ItemDropped(1, 1, 5, 1, "fluid", AirDrop.fallMs(1))), drops(match.tick(firstPass(5))));
+        assertEquals(List.of(new ItemDropped(1, 1, 5, 1, "fluid", AirDrop.FALL_MS)), drops(match.tick(firstPass(5))));
     }
 
     @Test
@@ -285,7 +295,7 @@ class MatchAirplaneTest {
 
         List<ItemDropped> dropped = drops(match.tick(SECOND + AirDrop.passMs(map, Facing.LEFT, 0)));
 
-        assertEquals(List.of(new ItemDropped(2, 3, 4, 1, "shoe", AirDrop.fallMs(1))), dropped);
+        assertEquals(List.of(new ItemDropped(2, 3, 4, 1, "shoe", AirDrop.FALL_MS)), dropped);
         assertTrue(random.isUsedUp());
     }
 
@@ -295,15 +305,15 @@ class MatchAirplaneTest {
         match.move(CONN_RED, RED, GameMap.centerX(3), GameMap.centerY(1), Facing.DOWN, false, FIRST);
         match.tick(FIRST);
 
-        assertEquals(List.of(new ItemDropped(1, 1, 3, 1, "bubble", AirDrop.fallMs(1))), drops(match.tick(firstPass(3))));
-        assertEquals(List.of(), takers(match.tick(lands(3, 1) - 1)));
-        List<MatchEvent> landed = match.tick(lands(3, 1));
+        assertEquals(List.of(new ItemDropped(1, 1, 3, 1, "bubble", AirDrop.FALL_MS)), drops(match.tick(firstPass(3))));
+        assertEquals(List.of(), takers(match.tick(lands(3) - 1)));
+        List<MatchEvent> landed = match.tick(lands(3));
 
         assertEquals(List.of(List.of(1L, RED)), takers(landed));
         assertEquals(List.of(CONN_RED, CONN_BLUE), landed.get(0).recipients());
         assertEquals(2, match.player(RED).balloonCapacity());
         // 이미 먹었으므로 클라이언트가 늦게 보낸 줍기는 버려진다
-        assertEquals(List.of(), match.pickUpItem(CONN_RED, RED, 1, lands(3, 1)));
+        assertEquals(List.of(), match.pickUpItem(CONN_RED, RED, 1, lands(3)));
     }
 
     @Test
@@ -312,9 +322,9 @@ class MatchAirplaneTest {
         match.tick(FIRST);
         assertEquals(1, drops(match.tick(firstPass(3))).size());
 
-        match.move(CONN_BLUE, BLUE, GameMap.centerX(3), GameMap.centerY(1), Facing.LEFT, false, lands(3, 1) - 1);
+        match.move(CONN_BLUE, BLUE, GameMap.centerX(3), GameMap.centerY(1), Facing.LEFT, false, lands(3) - 1);
 
-        assertEquals(List.of(List.of(1L, BLUE)), takers(match.tick(lands(3, 1))));
+        assertEquals(List.of(List.of(1L, BLUE)), takers(match.tick(lands(3))));
     }
 
     @Test
@@ -325,9 +335,9 @@ class MatchAirplaneTest {
         match.tick(FIRST);
         assertEquals(1, drops(match.tick(firstPass(3))).size());
 
-        assertEquals(List.of(), takers(match.tick(lands(3, 1))));
+        assertEquals(List.of(), takers(match.tick(lands(3))));
 
-        long later = lands(3, 1) + 1_000;
+        long later = lands(3) + 1_000;
         match.move(CONN_RED, RED, GameMap.centerX(3), GameMap.centerY(1), Facing.UP, false, later);
         assertEquals(List.of(List.of(1L, RED)), takers(match.pickUpItem(CONN_RED, RED, 1, later)));
     }
@@ -339,7 +349,7 @@ class MatchAirplaneTest {
         closer.move(CONN_BLUE, BLUE, GameMap.centerX(3) - 3, GameMap.centerY(1), Facing.RIGHT, false, FIRST);
         closer.tick(FIRST);
         closer.tick(firstPass(3));
-        assertEquals(List.of(List.of(1L, BLUE)), takers(closer.tick(lands(3, 1))));
+        assertEquals(List.of(List.of(1L, BLUE)), takers(closer.tick(lands(3))));
 
         // 파랑을 먼저 넣어 경기 안 순서가 아니라 playerId로 고르는지 본다
         Match tie = new Match(1, map, List.of(
@@ -354,7 +364,7 @@ class MatchAirplaneTest {
         tie.move(CONN_RED, RED, GameMap.centerX(3) + 5, GameMap.centerY(1), Facing.LEFT, false, FIRST);
         tie.tick(FIRST);
         tie.tick(firstPass(3));
-        assertEquals(List.of(List.of(1L, RED)), takers(tie.tick(lands(3, 1))));
+        assertEquals(List.of(List.of(1L, RED)), takers(tie.tick(lands(3))));
     }
 
     @Test
@@ -368,7 +378,7 @@ class MatchAirplaneTest {
         popped.tick(FIRST);
         assertEquals(MatchPlayer.State.POPPED, popped.player(RED_2).state());
         assertEquals(1, drops(popped.tick(firstPass(3))).size());
-        assertEquals(List.of(), takers(popped.tick(lands(3, 1))));
+        assertEquals(List.of(), takers(popped.tick(lands(3))));
 
         // 3P가 (3,1)에 선 채 나간다
         Match left = playingWithSecondRed(
@@ -377,7 +387,7 @@ class MatchAirplaneTest {
         left.leave(CONN_RED_2, "EXIT", false, FIRST);
         left.tick(FIRST);
         assertEquals(1, drops(left.tick(firstPass(3))).size());
-        assertEquals(List.of(), takers(left.tick(lands(3, 1))));
+        assertEquals(List.of(), takers(left.tick(lands(3))));
     }
 
     @Test
@@ -393,11 +403,11 @@ class MatchAirplaneTest {
         List<MatchEvent> rescued = match.move(CONN_RED, RED, GameMap.centerX(3) + 5, GameMap.centerY(1), Facing.LEFT,
                 false, rescuedAt);
         assertTrue(rescued.stream().anyMatch(event -> event.type().equals(MatchMessages.PLAYER_RESCUED)));
-        assertTrue(match.player(RED_2).isEscaping(lands(3, 1)));
+        assertTrue(match.player(RED_2).isEscaping(lands(3)));
         assertEquals(1, drops(match.tick(firstPass(3))).size());
 
         // 칸 가운데에 선 3P가 1P보다 가깝다
-        assertEquals(List.of(List.of(1L, RED_2)), takers(match.tick(lands(3, 1))));
+        assertEquals(List.of(List.of(1L, RED_2)), takers(match.tick(lands(3))));
     }
 
     @Test
@@ -405,14 +415,14 @@ class MatchAirplaneTest {
         // 1P가 (1,1)에서 오른쪽으로 뛰어 (3,1)에 내려앉는다. 공중에 있는 동안 아이템이 (3,1)에 닿는다
         Match match = playing(new ScriptedRandom(plan(new Cell(3, 1), ItemType.BUBBLE, new Cell(5, 1), ItemType.FLUID)));
         match.tick(FIRST);
-        long jumpAt = lands(3, 1) - 200;
+        long jumpAt = lands(3) - 200;
         match.player(RED).takeItem(ItemType.SPRING_SHOE);
         match.move(CONN_RED, RED, GameMap.centerX(1), GameMap.centerY(1), Facing.RIGHT, false, jumpAt);
         assertTrue(match.useItem(CONN_RED, RED, ItemType.SPRING_SHOE, jumpAt).stream()
                 .anyMatch(event -> event.type().equals(MatchMessages.ITEM_USED)));
         assertEquals(1, drops(match.tick(firstPass(3))).size());
 
-        assertEquals(List.of(), takers(match.tick(lands(3, 1))));
+        assertEquals(List.of(), takers(match.tick(lands(3))));
         assertEquals(List.of(List.of(1L, RED)), takers(match.tick(jumpAt + Match.JUMP_MS)));
     }
 
@@ -429,7 +439,7 @@ class MatchAirplaneTest {
         assertEquals(List.of(1), bodies(exploded, MatchMessages.BALLOON_EXPLODED,
                 MatchMessages.BalloonExploded.class).get(0).removedItems());
 
-        assertEquals(List.of(), match.tick(lands(3, 2)));
+        assertEquals(List.of(), match.tick(lands(3)));
     }
 
     @Test
@@ -441,7 +451,7 @@ class MatchAirplaneTest {
         match.move(CONN_RED, RED, GameMap.centerX(3), GameMap.centerY(1), Facing.UP, false, pass);
         assertEquals(List.of(List.of(1L, RED)), takers(match.pickUpItem(CONN_RED, RED, 1, pass)));
 
-        assertEquals(List.of(), takers(match.tick(lands(3, 1))));
+        assertEquals(List.of(), takers(match.tick(lands(3))));
         assertEquals(2, match.player(RED).balloonCapacity());
     }
 
@@ -481,10 +491,10 @@ class MatchAirplaneTest {
         match.tick(FIRST);
 
         assertEquals(1, drops(match.tick(firstPass(3))).size());
-        assertEquals(List.of(), takers(match.tick(lands(3, 1))));
+        assertEquals(List.of(), takers(match.tick(lands(3))));
 
         // 같은 편 1P가 닿아 구해 주면 발밑의 아이템을 바로 먹는다
-        long rescuedAt = lands(3, 1) + 100;
+        long rescuedAt = lands(3) + 100;
         List<MatchEvent> rescued = match.move(CONN_RED, RED, GameMap.centerX(3) + 5, GameMap.centerY(1), Facing.LEFT,
                 false, rescuedAt);
         assertTrue(rescued.stream().anyMatch(event -> event.type().equals(MatchMessages.PLAYER_RESCUED)));
@@ -500,7 +510,7 @@ class MatchAirplaneTest {
         match.tick(explodeAt);
         match.tick(FIRST);
 
-        assertEquals(List.of(new ItemDropped(1, 2, 3, 1, "bubble", AirDrop.fallMs(1))), drops(match.tick(firstPass(3))));
+        assertEquals(List.of(new ItemDropped(1, 2, 3, 1, "bubble", AirDrop.FALL_MS)), drops(match.tick(firstPass(3))));
     }
 
     @Test
