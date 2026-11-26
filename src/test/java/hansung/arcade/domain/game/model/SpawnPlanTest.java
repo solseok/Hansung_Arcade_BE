@@ -87,6 +87,33 @@ class SpawnPlanTest {
     }
 
     @Test
+    void 캠프_08에서_큰_팀의_누가_상대_진영으로_넘칠지는_참가자_차례가_아니라_무작위다() {
+        List<Team> teams = teams(5, 3);
+        Set<Integer> overflowed = new HashSet<>();
+        for (int seed = 0; seed < 200; seed++) {
+            List<Integer> spawns = SpawnPlan.assign(CAMP, teams, 8, nextRandom());
+            Set<Integer> blue = spawnsOf(teams, spawns, Team.BLUE);
+            Set<Integer> blueSide = LEFT.containsAll(blue) ? LEFT : RIGHT;
+            for (int i = 0; i < 5; i++) {
+                if (blueSide.contains(spawns.get(i))) {
+                    overflowed.add(i);
+                }
+            }
+        }
+        // 빨강 다섯 명 모두 한 번씩은 파랑 진영에서 시작한다
+        assertEquals(Set.of(0, 1, 2, 3, 4), overflowed);
+    }
+
+    @Test
+    void 사람이_두_진영_자리를_합친_것보다_많으면_진영을_나누지_않고_섞는다() {
+        // 맵 파일 스폰이 진영 자리(8)보다 많아진 경우. 넘친 사람이 앉을 자리가 없어 섞어 나눈다
+        List<Team> teams = teams(6, 3);
+        List<Integer> spawns = SpawnPlan.assign(CAMP, teams, 9, nextRandom());
+        assertEquals(9, Set.copyOf(spawns).size());
+        assertTrue(spawns.stream().allMatch(n -> n >= 1 && n <= 9), spawns.toString());
+    }
+
+    @Test
     void 캠프_08에서_한_명씩_붙어도_서로_다른_진영에서_시작한다() {
         List<Team> teams = teams(1, 1);
         for (int seed = 0; seed < 50; seed++) {

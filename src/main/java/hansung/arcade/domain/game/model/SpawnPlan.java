@@ -18,7 +18,8 @@ import java.util.random.RandomGenerator;
  * 실제 캠프 08 4:4 영상(라운드 시작 장면 두 판)에서 같은 팀이 모두 가운데 철조망 한쪽에서 시작했고, 어느 팀이 어느 쪽인지는
  * 판마다 달랐다. 그래서 진영은 경기마다 무작위로 팀에 주고, 진영 안의 자리도 무작위로 나눈다.
  * 한 팀이 진영 자리(4칸)보다 많으면 넘친 사람은 상대 진영에 남은 자리에서 시작한다 (나무위키 "캠프 08": 팀원이 5명이 넘어가면
- * 상대방 팀에 침입). 세 팀 이상이면 진영을 나눌 수 없으므로 보통 맵처럼 섞는다.</p>
+ * 상대방 팀에 침입). 누가 넘칠지는 참가자 차례가 아니라 경기마다 무작위다.
+ * 세 팀 이상이거나 사람이 두 진영 자리를 합친 것보다 많으면 진영을 나눌 수 없으므로 보통 맵처럼 섞는다.</p>
  */
 public final class SpawnPlan {
 
@@ -38,7 +39,8 @@ public final class SpawnPlan {
         }
         List<List<Integer>> sides = GameMaps.sides(mapId);
         List<Team> distinct = teams.stream().distinct().toList();
-        if (sides.size() == 2 && distinct.size() == 2) {
+        int sideSpawns = sides.stream().mapToInt(List::size).sum();
+        if (sides.size() == 2 && distinct.size() == 2 && teams.size() <= sideSpawns) {
             return bySide(sides, distinct, teams, random);
         }
         List<Integer> numbers = new ArrayList<>();
@@ -49,7 +51,10 @@ public final class SpawnPlan {
         return List.copyOf(numbers.subList(0, teams.size()));
     }
 
-    /** 두 팀에 진영을 하나씩 무작위로 주고, 진영 자리가 모자란 팀은 상대 진영에 남은 자리를 쓴다 */
+    /**
+     * 두 팀에 진영을 하나씩 무작위로 주고, 진영 자리가 모자란 팀은 상대 진영에 남은 자리를 쓴다.
+     * 자리는 참가자를 무작위 차례로 돌며 나눠서, 큰 팀에서 누가 상대 진영으로 넘칠지도 무작위다
+     */
     private static List<Integer> bySide(List<List<Integer>> sides, List<Team> distinct, List<Team> teams,
                                         RandomGenerator random) {
         List<List<Integer>> order = new ArrayList<>(sides);
@@ -61,8 +66,13 @@ public final class SpawnPlan {
             own.put(distinct.get(i), new ArrayDeque<>(side));
         }
         Integer[] assigned = new Integer[teams.size()];
-        List<Integer> overflow = new ArrayList<>();
+        List<Integer> turns = new ArrayList<>();
         for (int i = 0; i < teams.size(); i++) {
+            turns.add(i);
+        }
+        Collections.shuffle(turns, random);
+        List<Integer> overflow = new ArrayList<>();
+        for (int i : turns) {
             Integer spawn = own.get(teams.get(i)).poll();
             if (spawn == null) {
                 overflow.add(i);
