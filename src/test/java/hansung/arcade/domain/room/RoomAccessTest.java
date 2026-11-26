@@ -8,6 +8,7 @@ import hansung.arcade.domain.room.model.ChatText;
 import hansung.arcade.domain.room.model.Room;
 import hansung.arcade.domain.room.model.RoomMember;
 import hansung.arcade.domain.room.model.RoomMessages;
+import hansung.arcade.domain.room.model.RoomMode;
 import hansung.arcade.domain.room.model.RoomStatus;
 import hansung.arcade.domain.room.web.controller.RoomConnections;
 import hansung.arcade.domain.room.web.controller.RoomHandlers;
@@ -37,10 +38,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RoomAccessTest {
 
     private static final Map<Class<?>, Set<String>> PUBLIC_METHODS = Map.ofEntries(
-            Map.entry(Room.class, Set.of("number", "title", "capacity", "mapId", "status", "hostId", "members",
+            Map.entry(Room.class, Set.of("number", "title", "mode", "teams", "capacity", "mapId", "status", "hostId", "members",
                     "size", "isEmpty", "canSeat", "membersOf", "isHostConnection", "seat", "unseat", "ready",
                     "selectCharacter", "selectTeam", "changeMap", "startPlaying", "cancelPlaying", "finishPlaying", "allReady",
                     "teamCount", "closedSlots", "setSlotOpen")),
+            Map.entry(RoomMode.class, Set.of("teamsFor", "parse", "values", "valueOf")),
             Map.entry(RoomMember.class, Set.of("playerId", "connectionId", "nickname", "slot", "character", "team",
                     "ready")),
             Map.entry(ChatText.class, Set.of("byteLength", "clean", "stripBlank", "isBlank")),
@@ -165,7 +167,7 @@ class RoomAccessTest {
         assertEquals(new TreeSet<>(Set.of("TITLE_INVALID", "CAPACITY_INVALID", "CAPACITY_TOO_SMALL",
                 "ALREADY_IN_ROOM", "ROOM_LIMIT", "ROOM_NOT_FOUND", "ROOM_PLAYING", "ROOM_FULL", "NO_ROOM",
                 "MAP_INVALID", "MAP_TOO_SMALL", "NOT_ENOUGH_PLAYERS", "NOT_ALL_READY", "ONE_TEAM", "SLOT_OCCUPIED",
-                "SLOT_LOCKED")), codes);
+                "SLOT_LOCKED", "TEAM_NOT_ALLOWED")), codes);
     }
 
     @Test
