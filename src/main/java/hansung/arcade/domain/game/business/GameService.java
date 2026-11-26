@@ -10,13 +10,13 @@ import hansung.arcade.domain.game.model.Mascot;
 import hansung.arcade.domain.game.model.Match;
 import hansung.arcade.domain.game.model.MatchEvent;
 import hansung.arcade.domain.game.model.MatchPlayer;
+import hansung.arcade.domain.game.model.SpawnPlan;
 import hansung.arcade.domain.game.model.Team;
 import hansung.arcade.global.exception.GameException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -93,7 +93,7 @@ public final class GameService {
     }
 
     /**
-     * 경기를 열고 GAME_STARTED를 보낸다. 맵·캐릭터의 {@code random}은 여기서 실제 값으로 정하고, 스폰 자리는 무작위로 나눈다.
+     * 경기를 열고 GAME_STARTED를 보낸다. 맵·캐릭터의 {@code random}은 여기서 실제 값으로 정하고, 스폰 자리는 {@link SpawnPlan}으로 나눈다.
      *
      * @param mapId 맵 id 또는 {@code random}
      * @throws IllegalArgumentException 팀이 둘 미만, 모르는 맵·캐릭터, 정원 초과, 이미 경기 중인 연결
@@ -114,15 +114,9 @@ public final class GameService {
                     "%s 맵에는 %d명까지 들어갑니다.".formatted(actualMapId, GameMaps.maxPlayers(actualMapId)));
         }
         GameMap map = MapLoader.load(actualMapId);
-        if (participants.size() > map.spawns().size()) {
-            throw new IllegalArgumentException("맵의 스폰 자리가 모자랍니다: " + actualMapId);
-        }
-
-        List<Integer> spawnNumbers = new ArrayList<>();
-        for (int i = 1; i <= map.spawns().size(); i++) {
-            spawnNumbers.add(i);
-        }
-        Collections.shuffle(spawnNumbers, random);
+        // 보통은 무작위, 캠프 08처럼 진영이 나뉜 맵에서 두 팀이 붙으면 팀마다 한 진영에서 시작한다
+        List<Integer> spawnNumbers = SpawnPlan.assign(actualMapId,
+                participants.stream().map(Participant::team).toList(), map.spawns().size(), random);
 
         List<MatchPlayer> players = new ArrayList<>();
         for (int i = 0; i < participants.size(); i++) {
@@ -230,6 +224,30 @@ public final class GameService {
         }
         synchronized (match) {
             deliver(match, match.pushBox(connectionId, playerId, col, row, direction, clock.getAsLong()));
+        }
+        notifyIfFinished(match);
+    }
+
+    /** BALLOON_THROW. 경기 중이 아니거나 던질 수 없으면 조용히 버린다 */
+    public void throwBalloon(long connectionId, long playerId, int col, int row, Facing direction) {
+        Match match = byConnection.get(connectionId);
+        if (match == null) {
+            return;
+        }
+        synchronized (match) {
+            deliver(match, match.throwBalloon(connectionId, playerId, col, row, direction, clock.getAsLong()));
+        }
+        notifyIfFinished(match);
+    }
+
+    /** BALLOON_KICK. 경기 중이 아니거나 찰 수 없으면 조용히 버린다 */
+    public void kickBalloon(long connectionId, long playerId, int col, int row, Facing direction) {
+        Match match = byConnection.get(connectionId);
+        if (match == null) {
+            return;
+        }
+        synchronized (match) {
+            deliver(match, match.kickBalloon(connectionId, playerId, col, row, direction, clock.getAsLong()));
         }
         notifyIfFinished(match);
     }

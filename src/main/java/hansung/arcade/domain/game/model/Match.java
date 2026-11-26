@@ -2,7 +2,10 @@ package hansung.arcade.domain.game.model;
 
 import hansung.arcade.domain.game.model.MatchMessages.AirplaneAppeared;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonExploded;
+import hansung.arcade.domain.game.model.MatchMessages.BalloonKicked;
 import hansung.arcade.domain.game.model.MatchMessages.BalloonPlaced;
+import hansung.arcade.domain.game.model.MatchMessages.BalloonStopped;
+import hansung.arcade.domain.game.model.MatchMessages.BalloonThrown;
 import hansung.arcade.domain.game.model.MatchMessages.BoxMoved;
 import hansung.arcade.domain.game.model.MatchMessages.ChangedTile;
 import hansung.arcade.domain.game.model.MatchMessages.DroppedItem;
@@ -54,8 +57,11 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * → {@link #COUNTDOWN_MS} 뒤 PLAYING → (남은 팀 하나 · 모두 터짐 · {@link #TIME_LIMIT_MS}) → GAME_OVER
  * </pre>
  *
- * <p>PLAYING 동안 남은 시간이 {@link AirDrop#APPEARANCES_MS}가 되면 비행기가 나와(AIRPLANE_APPEARED) 맵을 가로지르며
- * 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED). 아이템이 칸에 닿는 순간 그 칸에 선 사람이 있으면 바로 먹인다(ITEM_TAKEN).</p>
+ * <p>PLAYING 동안 남은 시간이 {@link AirDrop#APPEARANCES_MS}가 되면 비행기가 나와(AIRPLANE_APPEARED) 맵의 한 줄을 따라
+ * 가로지르며 그 줄의 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED). 아이템이 칸에 닿는 순간 그 칸에 선 사람이 있으면 바로 먹인다(ITEM_TAKEN).</p>
+ *
+ * <p>장갑을 먹은 사람은 물풍선을 던지고(BALLOON_THROW → BALLOON_THROWN), 신발·빨간 악마를 먹은 사람은 막힌 앞 칸의 물풍선을
+ * 찬다(BALLOON_KICK → BALLOON_KICKED → BALLOON_STOPPED). 나는·미끄러지는 물풍선은 타이머가 옮긴다.</p>
  *
  * <p>모든 public 메서드는 이 객체로 잠근다. 받는 스레드(MOVE 등)와 타이머 스레드(tick)가 함께 부른다.</p>
  */
@@ -85,12 +91,29 @@ public final class Match {
     static final long MIN_TRAPPED_MS = 20;
     /** 두 캐릭터 중심이 가로·세로 모두 이보다 가까우면 닿은 것 (클라이언트 Player.TOUCH_DISTANCE) */
     static final double TOUCH_DISTANCE = GameMap.TILE_SIZE / 2.0;
+    /**
+     * 물줄기에 맞았다고 보는 겹침 비율 (클라이언트 BattleRules.SOAK_SHARE). 충돌 박스가 걸친 가로 줄 하나나 세로 열 하나에서
+     * 물줄기 칸과 겹친 넓이가 박스 넓이의 66% 이상이어야 갇힌다. 그래서 칸 경계에 걸쳐 서면 맞지 않을 수 있다(걸치기)
+     */
+    static final double SOAK_SHARE = 0.66;
+    /** 나눠 잰 비율이 경계에서 아주 조금 모자랄 수 있어 그만큼은 넘은 것으로 친다 (클라이언트와 같다) */
+    private static final double SHARE_SLACK = 1e-9;
     /** 보호막이 물줄기를 막아 주는 시간 (클라이언트 PlayerGear.SHIELD_SECONDS) */
     public static final long SHIELD_MS = 3_000;
     /** 스프링 신발로 뛰어 내려앉기까지 (클라이언트 PlayerGear.JUMP_SECONDS) */
     public static final long JUMP_MS = 400;
     /** 스프링 신발로 뛰는 거리(칸). 바로 앞 칸을 넘어 그 너머 칸에 내려앉는다 (클라이언트 ItemActions.JUMP_TILES) */
     static final int JUMP_TILES = 2;
+    /** 장갑으로 던진 물풍선이 내려앉는 거리. 원래 칸을 0번째로 세어 이만큼째 칸이다 (클라이언트 BalloonField.THROW_DISTANCE) */
+    static final int THROW_TILES = 6;
+    /** 던진 물풍선이 한 칸을 나는 시간 (클라이언트 BalloonField.FLIGHT_SECONDS_PER_TILE) */
+    static final long FLIGHT_MS_PER_TILE = 60;
+    /** 아주 가까이 내려앉아도 이만큼은 난다 (클라이언트 BalloonField.MIN_FLIGHT_SECONDS) */
+    static final long MIN_FLIGHT_MS = 200;
+    /** 찬 물풍선이 한 칸을 미끄러지는 시간. 초당 10칸이다 (클라이언트 BalloonField.SLIDE_TILES_PER_SECOND) */
+    static final long BALLOON_SLIDE_MS_PER_TILE = 100;
+    /** 미끄러지는 물풍선이 칸 가운데에서 칸 경계까지, 또는 칸 경계에서 다음 칸 가운데까지 가는 시간 */
+    private static final long HALF_SLIDE_MS = BALLOON_SLIDE_MS_PER_TILE / 2;
 
     private final long matchId;
     private final GameMap map;
@@ -226,8 +249,9 @@ public final class Match {
 
     /**
      * BALLOON_PLACE. 놓을 수 없으면 조용히 버린다.
-     * 살아 있고 갇히지 않음, 마지막 MOVE 칸이나 그 상하좌우 칸(통신 지연 여유), 지나갈 수 있는 빈 칸,
-     * 놓아 둔 수가 능력치보다 적음. 물줄기가 남은 칸에 놓으면 바로 터진다 (클라이언트 BalloonField.place와 같다).
+     * 살아 있고 갇히지 않음, 마지막 MOVE 칸이나 그 상하좌우 칸(통신 지연 여유), 지나갈 수 있고 물풍선이 차지하지 않은 칸
+     * ({@link #holds}: 던진 물풍선이 내려앉을 칸, 미끄러지는 물풍선이 막 들어가려는 칸 포함), 놓아 둔 수가 능력치보다 적음.
+     * 물줄기가 남은 칸에 놓으면 바로 터진다 (클라이언트 BalloonField.place와 같다).
      */
     public synchronized List<MatchEvent> placeBalloon(long connectionId, long playerId, int col, int row, long now) {
         startPlayIfDue(now);
@@ -244,7 +268,7 @@ public final class Match {
         Cell cell = new Cell(col, row);
         if (!owner.isFree(now)
                 || owner.cell().distanceTo(cell) > 1
-                || map.isSolid(col, row) || balloonAt(cell) != null
+                || map.isSolid(col, row) || holds(cell)
                 || owner.placedBalloons() >= owner.balloonCapacity()) {
             return events;
         }
@@ -257,8 +281,7 @@ public final class Match {
                 col, row, balloon.range(), fuseMs)));
         if (wet) {
             // 갇힌 사람의 닿음 판정은 MIN_TRAPPED_MS 뒤에 한다
-            explodeDueBalloons(now, events);
-            finishIfDecided(events);
+            explodeNow(now, events);
         }
         return events;
     }
@@ -325,7 +348,7 @@ public final class Match {
      *       갇힌 채 아이템 칸에 서 있었으면 ITEM_USED 바로 뒤에 그 아이템을 줍는다.</li>
      *   <li>보호막: 땅에 선 보통 상태이고 이미 쓰는 중이 아닐 때. {@link #SHIELD_MS} 동안 물줄기에 갇히지 않는다.</li>
      *   <li>스프링 신발: 땅에 선 보통 상태일 때. 마지막 MOVE의 칸과 방향에서 {@link #JUMP_TILES}칸 앞 칸에 내려앉는다.
-     *       바로 앞 칸은 무엇이든 넘고, 내려앉을 칸이 맵 밖·막힌 칸이거나 물풍선이 있으면 쓰지 않는다.
+     *       바로 앞 칸은 무엇이든 넘고, 내려앉을 칸이 맵 밖·막힌 칸이거나 물풍선이 차지했으면({@link #holds}) 쓰지 않는다.
      *       {@link #JUMP_MS} 동안 공중에 있다 (물줄기에 맞지 않고, MOVE·물풍선·줍기를 받지 않는다).</li>
      * </ul>
      *
@@ -385,7 +408,8 @@ public final class Match {
             case SPRING_SHOE -> {
                 Cell landing = new Cell(user.cell().col() + user.facing().dx() * JUMP_TILES,
                         user.cell().row() + user.facing().dy() * JUMP_TILES);
-                if (!user.isFree(now) || map.isSolid(landing.col(), landing.row()) || balloonAt(landing) != null) {
+                // 클라이언트 BalloonField.holds와 같다: 던진 물풍선이 내려앉을 칸, 미끄러지는 물풍선이 막 들어가려는 칸도 막는다
+                if (!user.isFree(now) || map.isSolid(landing.col(), landing.row()) || holds(landing)) {
                     return false;
                 }
                 user.jumpTo(landing, now + JUMP_MS);
@@ -461,7 +485,8 @@ public final class Match {
 
     /**
      * 밀린 상자를 받을 수 있는 칸인지 (클라이언트 BoxPusher.canReceive와 GameWorld.BOX_BLOCKERS).
-     * 맵 안의 바닥 타일이어야 하고(블럭·덤불·집 등이 없음), 물풍선·아이템·물줄기와 몸이 조금이라도 걸친 사람이 없어야 한다.
+     * 맵 안의 바닥 타일이어야 하고(블럭·덤불·집 등이 없음), 물풍선({@link #holds}: 던진 물풍선이 내려앉을 칸, 미끄러지는 물풍선이
+     * 막 들어가려는 칸 포함)·아이템·물줄기와 몸이 조금이라도 걸친 사람이 없어야 한다.
      * 쓰러지는 연출 중인 사람도 막는다. 물줄기가 남은 칸에 들어간 상자는 바로 부서질 수 있는데,
      * 거기서 나온 아이템이 그 물줄기에 바로 사라지므로 밀지 않는다.
      * 스프링 신발로 내려앉을 칸도 막는다 (클라이언트 CellOccupancy.Occupant.JUMP_LANDING). 서버는 뛰는 순간 위치를
@@ -469,7 +494,7 @@ public final class Match {
      */
     private boolean canReceiveBox(Cell cell, long now) {
         if (!map.isInside(cell.col(), cell.row()) || !map.tileAt(cell.col(), cell.row()).isGround()
-                || balloonAt(cell) != null || itemAt(cell) != null || flameAt(cell, now) != null) {
+                || holds(cell) || itemAt(cell) != null || flameAt(cell, now) != null) {
             return false;
         }
         for (MatchPlayer player : players.values()) {
@@ -478,6 +503,111 @@ public final class Match {
             }
         }
         return true;
+    }
+
+    /**
+     * BALLOON_THROW. 장갑으로 물풍선을 던진다. 던지면 방 전체에 BALLOON_THROWN을 보낸다. 던질 수 없으면 조용히 버린다.
+     *
+     * <p>던질 수 있는 조건은 클라이언트 {@code ItemActions.pressBalloonKey}와 같다.</p>
+     * <ul>
+     *   <li>던지는 사람이 장갑을 먹었고, 살아 있고 갇히지 않았으며 빠져나오는 중도 공중도 아니다 (클라이언트 PlayerState.NORMAL).</li>
+     *   <li>마지막 MOVE의 방향이 direction이고, (col, row)가 그 MOVE 칸(몸 가운데 칸)이거나 direction 쪽 바로 다음 칸이다.
+     *       걷는 중이어도 던진다. 클라이언트는 선 칸의 물풍선을 먼저 고르지만, 서버는 두 칸 가운데 어느 쪽이든 받는다
+     *       (통신 지연으로 발밑 물풍선이 클라이언트에 늦게 보일 수 있다).</li>
+     *   <li>(col, row)에 가만히 놓인 물풍선이 있다. 누구 물풍선이든 던진다. 미끄러지거나 나는 물풍선은 던지지 않는다.</li>
+     *   <li>내려앉을 칸({@link #landingCell})이 제자리가 아니다.</li>
+     * </ul>
+     * <p>물풍선은 거리에 맞춰 한 칸에 {@link #FLIGHT_MS_PER_TILE}씩(적어도 {@link #MIN_FLIGHT_MS}) 난다. 나는 동안은 어느 칸에도
+     * 없어서 길을 막지 않고, 물줄기가 지나가며 연쇄로 터지지도 않는다. 다만 내려앉을 칸은 차지한 것으로 친다 ({@link #holds}).
+     * 퓨즈는 그대로 흘러, 나는 사이 다 되면 내려앉자마자 터진다. 내려앉는 일은 타이머가 한다 ({@link #land}).</p>
+     */
+    public synchronized List<MatchEvent> throwBalloon(long connectionId, long playerId, int col, int row,
+                                                      Facing direction, long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING || direction == null) {
+            return List.of();
+        }
+        MatchPlayer thrower = ownPlayer(connectionId, playerId);
+        if (thrower == null) {
+            return List.of();
+        }
+        List<MatchEvent> events = new ArrayList<>();
+        // 타이머보다 먼저 왔으면 그때까지의 물풍선 이동·폭발을 먼저 처리한다. 퓨즈가 다 된 물풍선은 던지지 않고 터지고,
+        // 내려앉을 때가 된 물풍선은 내려앉아 던질 수 있다 (클라이언트도 물풍선을 옮기고 터뜨린 뒤 물풍선 키를 본다)
+        explodeNow(now, events);
+        // 내려앉기·보호막 끝도 먼저 처리한다 (물줄기 위에 내려앉았으면 갇혀 던지지 못한다)
+        endItemEffectsIfDue(thrower, now, events);
+        if (phase != Phase.PLAYING) {
+            return events;
+        }
+        Cell from = new Cell(col, row);
+        if (!thrower.isFree(now) || !thrower.canThrowBalloons() || thrower.facing() != direction
+                || !(from.equals(thrower.cell()) || from.equals(ahead(thrower.cell(), direction, 1)))) {
+            return events;
+        }
+        Balloon balloon = restingAt(from);
+        if (balloon == null) {
+            return events;
+        }
+        Cell landing = landingCell(from, direction, THROW_TILES, balloon);
+        if (landing.equals(from)) {
+            return events;
+        }
+        events.add(fly(balloon, thrower.playerId(), direction, landing, now));
+        return events;
+    }
+
+    /**
+     * BALLOON_KICK. 신발·빨간 악마로 막힌 앞 칸의 물풍선을 찬다. 미끄러지기 시작하면 방 전체에 BALLOON_KICKED를 보낸다.
+     * 찰 수 없으면 조용히 버린다.
+     *
+     * <p>찰 수 있는 조건은 클라이언트 {@code ItemActions.kick}과 같다.</p>
+     * <ul>
+     *   <li>차는 사람이 신발이나 빨간 악마를 먹었고, 살아 있고 갇히지 않았으며 빠져나오는 중도 공중도 아니다.</li>
+     *   <li>마지막 MOVE가 멈춘 상태이고 direction 쪽을 보며, 그 칸(몸 가운데 칸)의 direction 쪽 바로 다음 칸이 (col, row)다.
+     *       클라이언트는 그 물풍선에 막혀 움직이지 못한 채 그쪽을 누를 때 찬다.</li>
+     *   <li>(col, row)에 가만히 놓인 물풍선이 있고(누구 것이든), 차는 사람의 몸이 그 칸에 걸쳐 있지 않다.
+     *       걸쳐 있으면 놓는 순간 그 칸에 있어 아직 지나갈 수 있는 사람이라 막히지 않았다 (클라이언트 WaterBalloon.lets).</li>
+     *   <li>미끄러질 수 있다 ({@link #keepsSliding}). 못 미끄러지는데 바로 앞이 그쪽으로 가시 난 블럭이면 그 자리에서 바로 터진다
+     *       (BALLOON_EXPLODED만 보낸다).</li>
+     * </ul>
+     * <p>미끄러지는 일은 타이머가 한다 ({@link #slide}).</p>
+     */
+    public synchronized List<MatchEvent> kickBalloon(long connectionId, long playerId, int col, int row,
+                                                     Facing direction, long now) {
+        startPlayIfDue(now);
+        if (phase != Phase.PLAYING || direction == null) {
+            return List.of();
+        }
+        MatchPlayer kicker = ownPlayer(connectionId, playerId);
+        if (kicker == null) {
+            return List.of();
+        }
+        List<MatchEvent> events = new ArrayList<>();
+        // 던지기와 같다: 그때까지의 물풍선 이동·폭발과 내려앉기·보호막 끝을 먼저 처리한다
+        explodeNow(now, events);
+        endItemEffectsIfDue(kicker, now, events);
+        if (phase != Phase.PLAYING) {
+            return events;
+        }
+        Cell cell = new Cell(col, row);
+        if (!kicker.isFree(now) || !kicker.canPushBalloons() || kicker.moving() || kicker.facing() != direction
+                || !cell.equals(ahead(kicker.cell(), direction, 1)) || kicker.overlaps(cell)) {
+            return events;
+        }
+        Balloon balloon = restingAt(cell);
+        if (balloon == null) {
+            return events;
+        }
+        if (keepsSliding(balloon, direction)) {
+            balloon.startSliding(direction, now + HALF_SLIDE_MS);
+            events.add(toAll(MatchMessages.BALLOON_KICKED, new BalloonKicked(balloon.balloonId(), kicker.playerId(),
+                    col, row, direction.name())));
+        } else if (facesThorn(cell, direction)) {
+            balloon.burstBy(now);
+            explodeNow(now, events);
+        }
+        return events;
     }
 
     /**
@@ -548,8 +678,8 @@ public final class Match {
     }
 
     /**
-     * 타이머가 자주(수십 ms마다) 부른다. 로딩 시간 초과, 카운트다운 끝, 물풍선 폭발, 아이템 효과 끝(내려앉기·보호막),
-     * 갇힘 시간 초과, 제한 시간을 처리한다
+     * 타이머가 자주(수십 ms마다) 부른다. 로딩 시간 초과, 카운트다운 끝, 던진·찬 물풍선 옮기기, 물풍선 폭발,
+     * 아이템 효과 끝(내려앉기·보호막), 갇힘 시간 초과, 제한 시간을 처리한다
      */
     public synchronized List<MatchEvent> tick(long now) {
         List<MatchEvent> events = new ArrayList<>();
@@ -561,6 +691,8 @@ public final class Match {
             }
             case COUNTDOWN -> startPlayIfDue(now);
             case PLAYING -> {
+                // 클라이언트 BalloonField.update와 같은 차례: 물풍선을 옮긴 뒤 때가 된 것을 터뜨린다
+                moveBalloons(now, events);
                 explodeDueBalloons(now, events);
                 // 클라이언트 한 틱과 같은 차례: 내려앉은 자리를 이번 폭발이 덮으면 아이템이 먼저 사라지고 갇힌다
                 for (MatchPlayer player : players.values()) {
@@ -608,6 +740,215 @@ public final class Match {
     }
 
     /**
+     * 던진 물풍선을 내려앉히고 찬 물풍선을 미끄러뜨린다. 지금까지 일어났어야 할 일(내려앉는 때, 칸 경계를 넘는 때, 칸 가운데에 오는 때)을
+     * 모든 물풍선에 걸쳐 일어난 시각 순서대로 하나씩 처리하고(같은 시각이면 놓은 순서), 판정은 그 시각의 맵·물풍선·물줄기로 한다.
+     * 그래서 물풍선끼리의 이동 순서는 tick 간격에 흔들리지 않는다. 다만 퓨즈로 터지는 것과 그 물줄기는 tick(또는 입력)을 처리하는
+     * 시각에 생기므로, 그 사이에 일어난 이동과의 앞뒤는 tick 한 번(수십 ms)만큼 어긋날 수 있다 (클라이언트도 틱 단위로 본다).
+     * 미끄러지는 물풍선은 퓨즈가 다 된 뒤의 일은 처리하지 않는다 (그 순간 있던 칸에서 터진다).
+     * 그 자리에서 터져야 하면 퓨즈를 그 시각으로 당겨 두고, 바로 뒤 {@link #explodeDueBalloons}가 터뜨린다.
+     */
+    private void moveBalloons(long now, List<MatchEvent> events) {
+        while (true) {
+            Balloon next = null;
+            for (Balloon balloon : balloons) {
+                long at = nextMoveAt(balloon);
+                if (at <= now && (next == null || at < nextMoveAt(next))) {
+                    next = balloon;
+                }
+            }
+            if (next == null) {
+                return;
+            }
+            if (next.isFlying()) {
+                land(next, events);
+            } else {
+                slide(next, events);
+            }
+        }
+    }
+
+    /** 이 물풍선에 다음으로 일어날 일의 시각. 가만히 있거나, 미끄러지는데 그 전에 퓨즈가 다 되면 없다 (Long.MAX_VALUE) */
+    private static long nextMoveAt(Balloon balloon) {
+        if (balloon.isFlying()) {
+            return balloon.landsAt();
+        }
+        if (balloon.isSliding() && balloon.nextSlideAt() <= balloon.fuseAt()) {
+            return balloon.nextSlideAt();
+        }
+        return Long.MAX_VALUE;
+    }
+
+    /**
+     * 입력을 처리하는 지금(now)까지 일어났어야 할 물풍선 이동과 폭발을 처리하고 경기가 끝났는지 본다. tick과 같은 차례다.
+     * 입력 처리 중에 터뜨려야 할 때(물줄기 칸에 놓기, 가시 면으로 차기)와, 묵은 물풍선 상태로 던지기·차기를 판정하지 않으려 할 때 부른다.
+     * 이동을 먼저 처리하므로, 미끄러지는 물풍선이 아직 처리되지 않은 이전 칸에서 터지거나 나중에 생긴 물줄기를 보지 않는다.
+     */
+    private void explodeNow(long now, List<MatchEvent> events) {
+        moveBalloons(now, events);
+        explodeDueBalloons(now, events);
+        finishIfDecided(events);
+    }
+
+    /**
+     * 날던 물풍선을 내려앉힌다 (클라이언트 BalloonField.land).
+     * <ul>
+     *   <li>나는 사이 그 칸이 막혔거나 다른 물풍선이 차지했으면 같은 방향의 다음 빈 칸으로 더 날아간다
+     *       (BALLOON_THROWN, playerId 없음). 맵 끝까지 빈 칸이 없으면 그 자리에서 터진다.</li>
+     *   <li>물줄기가 남은 칸이나 바닥 가시 칸에 내려앉으면 바로 터진다.</li>
+     *   <li>퓨즈가 나는 사이 다 됐으면 내려앉자마자 터진다 (나는 동안 기다린 것을 {@link #explodeDueBalloons}가 터뜨린다).</li>
+     * </ul>
+     * 사람이 있는 칸에도 내려앉는다. 그 사람은 칸을 벗어날 때까지 지나갈 수 있다 (클라이언트가 막지 않는다).
+     */
+    private void land(Balloon balloon, List<MatchEvent> events) {
+        long at = balloon.landsAt();
+        Facing direction = balloon.flightDirection();
+        balloon.stopFlying();
+        if (!canLand(balloon.cell(), balloon)) {
+            Cell next = landingCell(balloon.cell(), direction, 1, balloon);
+            if (next.equals(balloon.cell())) {
+                balloon.burstBy(at);
+            } else {
+                events.add(fly(balloon, null, direction, next, at));
+            }
+        } else if (popsAt(balloon.cell(), at)) {
+            balloon.burstBy(at);
+        }
+    }
+
+    /**
+     * 미끄러지는 물풍선의 다음 일 하나를 처리한다 (클라이언트 BalloonField.slide). 한 칸에 {@link #BALLOON_SLIDE_MS_PER_TILE}이 걸린다.
+     * <ul>
+     *   <li>칸 가운데에 올 때마다 {@link #keepsSliding}으로 더 갈지 정한다. 더 가지 않으면 그 칸에 멈춘다.</li>
+     *   <li>칸 가운데를 떠나 반 칸을 가면 다음 칸으로 넘어간다. 그 사이 다음 칸이 막혔으면 지금 칸 가운데로 돌아가 멈춘다
+     *       (클라이언트와 같게 둔다. 서버에서는 막 들어가려는 칸으로 상자를 밀지 않으므로 생기지 않는다).
+     *       넘어간 칸에 물줄기가 남았거나 바닥 가시가 있으면 그 칸에서 바로 터진다.</li>
+     *   <li>사람·아이템·덤불은 막지 않고 지나간다. 다른 물풍선 위도 지나간다.</li>
+     * </ul>
+     */
+    private void slide(Balloon balloon, List<MatchEvent> events) {
+        long at = balloon.nextSlideAt();
+        Facing direction = balloon.slideDirection();
+        if (balloon.isLeavingCenter()) {
+            Cell next = ahead(balloon.cell(), direction, 1);
+            if (map.isSolid(next.col(), next.row())) {
+                stopSliding(balloon, at, events);
+                return;
+            }
+            balloon.enter(next, at + HALF_SLIDE_MS);
+            if (popsAt(next, at)) {
+                balloon.stopSliding();
+                balloon.burstBy(at);
+            }
+        } else if (keepsSliding(balloon, direction)) {
+            balloon.leaveCenter(at + HALF_SLIDE_MS);
+        } else {
+            stopSliding(balloon, at, events);
+        }
+    }
+
+    /**
+     * 미끄러지던 물풍선을 지금 칸 가운데에 세우고 BALLOON_STOPPED를 보낸다. 바로 앞이 그쪽으로 가시 난 블럭이거나,
+     * 다른 물풍선이 있는 칸이라 한 칸에 둘이 서게 되면 멈추지 않고 그 자리에서 터진다 (클라이언트 BalloonField.stopHere).
+     */
+    private void stopSliding(Balloon balloon, long at, List<MatchEvent> events) {
+        boolean pops = facesThorn(balloon.cell(), balloon.slideDirection()) || balloonsAt(balloon.cell()).size() > 1;
+        balloon.stopSliding();
+        if (pops) {
+            balloon.burstBy(at);
+            return;
+        }
+        events.add(toAll(MatchMessages.BALLOON_STOPPED,
+                new BalloonStopped(balloon.balloonId(), balloon.cell().col(), balloon.cell().row())));
+    }
+
+    /**
+     * 칸 가운데에 있는 미끄러지는 물풍선이 다음 칸으로 갈지 (클라이언트 BalloonField.keepsSliding).
+     * 앞쪽으로 막힌 칸(블럭·맵 끝)이 나오기 전까지의 칸 가운데 물풍선이 내려앉을 수 있는 칸({@link #canLand})이 하나라도 있으면 간다.
+     * 그래서 물풍선은 막힌 칸 바로 앞의 빈 칸에 멈추고, 그 칸에 다른 물풍선이 있으면 그 앞의 빈 칸에 멈춘다.
+     */
+    private boolean keepsSliding(Balloon balloon, Facing direction) {
+        for (int step = 1; ; step++) {
+            Cell cell = ahead(balloon.cell(), direction, step);
+            if (map.isSolid(cell.col(), cell.row())) {
+                return false;
+            }
+            if (canLand(cell, balloon)) {
+                return true;
+            }
+        }
+    }
+
+    /** cell의 travel 쪽 바로 다음 칸이 그쪽으로 가시 난 블럭인지 (클라이언트 BalloonField.facesThorn) */
+    private boolean facesThorn(Cell cell, Facing travel) {
+        Cell next = ahead(cell, travel, 1);
+        return map.isInside(next.col(), next.row()) && map.tileAt(next.col(), next.row()).popsBalloonMoving(travel);
+    }
+
+    /**
+     * from에서 direction 쪽으로 distance칸째부터 찾은, 던진 물풍선이 내려앉을 칸 (클라이언트 BalloonField.landingCell).
+     * <ol>
+     *   <li>distance칸째가 내려앉을 수 있는 칸({@link #canLand})이면 거기. 아니면 같은 방향으로 다음 빈 칸까지 더 간다.
+     *       사람·덤불·아이템이 있는 칸도 빈 칸이다.</li>
+     *   <li>맵 끝까지 빈 칸이 없으면(distance칸째가 맵 밖인 경우도) 맵 끝에서 거꾸로 돌아오며 처음 만난 빈 칸.</li>
+     *   <li>그것도 없으면 from 그대로.</li>
+     * </ol>
+     *
+     * @param self 내려앉을 물풍선 자신. 자기 칸은 비어 있는 것으로 본다
+     */
+    private Cell landingCell(Cell from, Facing direction, int distance, Balloon self) {
+        int last = 0;
+        while (map.isInside(from.col() + direction.dx() * (last + 1), from.row() + direction.dy() * (last + 1))) {
+            last++;
+        }
+        for (int step = distance; step <= last; step++) {
+            if (canLand(ahead(from, direction, step), self)) {
+                return ahead(from, direction, step);
+            }
+        }
+        for (int step = Math.min(last, distance - 1); step >= 1; step--) {
+            if (canLand(ahead(from, direction, step), self)) {
+                return ahead(from, direction, step);
+            }
+        }
+        return from;
+    }
+
+    /**
+     * 물풍선이 내려앉거나 미끄러져 멈출 수 있는 칸인지: 지나갈 수 있는 칸이고, self 말고 다른 물풍선의 칸(나는 물풍선은 내려앉을 칸)이
+     * 아니다. 사람은 보지 않는다. {@link #holds}와 달리 다른 물풍선이 미끄러져 막 들어가려는 칸은 막지 않는다
+     * (클라이언트 BalloonField.canLand: 앞서 미끄러지는 물풍선을 뒤따르는 물풍선은 앞의 것이 비켜 줄 칸까지 따라간다).
+     */
+    private boolean canLand(Cell cell, Balloon self) {
+        return !map.isSolid(cell.col(), cell.row()) && !hasBalloon(cell, self);
+    }
+
+    /** 놓이거나 내려앉거나 미끄러져 들어온 물풍선이 그 칸에서 바로 터지는지: 물줄기가 남은 칸이거나 바닥이 가시({@code !})다 */
+    private boolean popsAt(Cell cell, long at) {
+        return flameAt(cell, at) != null
+                || (map.isInside(cell.col(), cell.row()) && map.groundAt(cell.col(), cell.row()) == Tile.SPIKE);
+    }
+
+    /**
+     * 던진 물풍선을 지금 칸에서 to 칸으로 날린다. 나는 시간은 거리에 맞춘다.
+     *
+     * @param playerId 던진 사람. 내려앉을 칸이 막혀 더 날아가면 null
+     * @param at       날아오르는 시각
+     * @return 방 전체에 보낼 BALLOON_THROWN
+     */
+    private MatchEvent fly(Balloon balloon, Long playerId, Facing direction, Cell to, long at) {
+        Cell from = balloon.cell();
+        long flightMs = Math.max(MIN_FLIGHT_MS, from.distanceTo(to) * FLIGHT_MS_PER_TILE);
+        balloon.startFlying(direction, to, at + flightMs);
+        return toAll(MatchMessages.BALLOON_THROWN, new BalloonThrown(balloon.balloonId(), playerId, from.col(), from.row(),
+                to.col(), to.row(), direction.name(), flightMs));
+    }
+
+    /** from에서 direction 쪽으로 steps칸 간 칸 */
+    private static Cell ahead(Cell from, Facing direction, int steps) {
+        return new Cell(from.col() + direction.dx() * steps, from.row() + direction.dy() * steps);
+    }
+
+    /**
      * 터질 때가 된 물풍선을 연쇄까지 한꺼번에 터뜨려 BALLOON_EXPLODED 하나로 알리고, 물줄기에 있는 플레이어를 가둔다.
      *
      * <p>한 번에 터지는 물풍선은 모두 같은 순간 터진 것으로 본다. 그래서 줄기를 다 정할 때까지 물풍선을 맵에서 빼지 않고,
@@ -615,12 +956,16 @@ public final class Match {
      *
      * <p>아이템은 클라이언트 GameWorld와 같은 순서로 다룬다. 블럭을 맞히고, 다 부서진 블럭 자리에 아이템을 놓고,
      * 물줄기가 덮은 칸의 아이템을 없앤다. 블럭 자리는 물줄기가 들어가지 않은 칸이라 방금 나온 아이템은 남는다.</p>
+     *
+     * <p>나는 물풍선은 퓨즈가 다 돼도 내려앉을 때까지 기다리고, 물줄기에도 맞지 않는다. 미끄러지는 물풍선은 가운데가 가장 가까운
+     * 칸에서 터지고 맞는다. 한 칸에 물풍선이 둘 있으면(미끄러지는 물풍선이 다른 물풍선 위를 지나는 중) 함께 터진다
+     * (클라이언트 BalloonField.burst와 같다).</p>
      */
     private void explodeDueBalloons(long now, List<MatchEvent> events) {
         Deque<Balloon> queue = new ArrayDeque<>();
         Set<Balloon> exploding = new LinkedHashSet<>();
         for (Balloon balloon : balloons) {
-            if (balloon.fuseAt() <= now && exploding.add(balloon)) {
+            if (!balloon.isFlying() && balloon.fuseAt() <= now && exploding.add(balloon)) {
                 queue.add(balloon);
             }
         }
@@ -633,6 +978,11 @@ public final class Match {
         Set<Cell> wetCells = new LinkedHashSet<>();
         while (!queue.isEmpty()) {
             Balloon balloon = queue.poll();
+            for (Balloon overlapping : balloonsAt(balloon.cell())) {
+                if (exploding.add(overlapping)) {
+                    queue.add(overlapping);
+                }
+            }
             Set<Cell> covered = new LinkedHashSet<>();
             covered.add(balloon.cell());
             int[] reach = new int[Facing.values().length];
@@ -646,11 +996,13 @@ public final class Match {
                         }
                         break;
                     }
-                    Balloon other = balloonAt(new Cell(col, row));
-                    if (other != null) {
+                    List<Balloon> others = balloonsAt(new Cell(col, row));
+                    if (!others.isEmpty()) {
                         // 닿은 물풍선도 같은 순간 터져 그 칸을 덮는다
-                        if (exploding.add(other)) {
-                            queue.add(other);
+                        for (Balloon other : others) {
+                            if (exploding.add(other)) {
+                                queue.add(other);
+                            }
                         }
                         break;
                     }
@@ -697,7 +1049,7 @@ public final class Match {
         }
     }
 
-    /** 땅에 선 보통 상태이고 보호막을 쓰는 중이 아닌 사람이 물줄기 칸에 있으면 가둔다 */
+    /** 땅에 선 보통 상태이고 보호막을 쓰는 중이 아닌 사람이 물줄기에 맞았으면({@link #soakingFlame}) 가둔다 */
     private void trapIfWet(MatchPlayer player, long now, List<MatchEvent> events) {
         trapIfWetAt(player, now, now, events);
     }
@@ -707,7 +1059,7 @@ public final class Match {
         if (!player.isFree(at) || player.isShielded(at)) {
             return;
         }
-        Flame flame = flameAt(player.cell(), at);
+        Flame flame = soakingFlame(player, at);
         if (flame == null) {
             return;
         }
@@ -822,7 +1174,7 @@ public final class Match {
         for (int row = 0; row < map.rows(); row++) {
             for (int col = 0; col < map.columns(); col++) {
                 Cell cell = new Cell(col, row);
-                if (map.tileAt(col, row) == Tile.FLOOR && balloonAt(cell) == null && itemAt(cell) == null
+                if (map.tileAt(col, row) == Tile.FLOOR && !holds(cell) && itemAt(cell) == null
                         && flameAt(cell, now) == null && !occupied.contains(cell)) {
                     candidates.add(cell);
                 }
@@ -843,6 +1195,7 @@ public final class Match {
      * 다 부서진 블럭 자리에 아이템을 놓는다. 맵의 고정 드롭이 있으면 그것을, 없으면 클라이언트와 같은 비율표로 정한다.
      * 나올 확률은 경기 인원에 맞춘다 ({@link ItemDrops#dropChanceFor}). 고정 드롭에는 난수를 쓰지 않는다.
      * 액티브 아이템(바늘·보호막·스프링 신발)도 패시브와 똑같이 놓는다.
+     * 탱크는 비율표에 없어서 고정 드롭(캠프 08의 내구도 상자)으로만 나온다.
      */
     private Optional<DroppedItem> dropFromBrokenBlock(Cell cell) {
         return map.takeFixedDrop(cell.col(), cell.row())
@@ -934,17 +1287,18 @@ public final class Match {
         landFallingDrops(now, events);
     }
 
-    /** 비행기를 띄운다. 떨어뜨릴 칸은 지금 맵으로 고르고({@link AirDrop#plan}), 지나가는 순서로 줄 세운다 */
+    /** 비행기를 띄운다. 지나갈 줄과 떨어뜨릴 칸은 지금 맵으로 고르고({@link AirDrop#plan}), 지나가는 순서로 줄 세운다 */
     private void launchAirplane(long now, List<MatchEvent> events) {
         int airplaneId = ++lastAirplaneId;
         Facing heading = AirDrop.headingOf(airplaneId - 1);
+        AirDrop.Plan plan = airDrop.plan();
         List<PassingDrop> drops = new ArrayList<>();
-        for (AirDrop.Drop drop : airDrop.plan()) {
+        for (AirDrop.Drop drop : plan.drops()) {
             drops.add(new PassingDrop(drop, now + AirDrop.passMs(map, heading, drop.col())));
         }
         drops.sort(Comparator.comparingLong(PassingDrop::passAt));
         airplanes.add(new Airplane(airplaneId, new ArrayDeque<>(drops)));
-        events.add(toAll(MatchMessages.AIRPLANE_APPEARED, new AirplaneAppeared(airplaneId, heading.name())));
+        events.add(toAll(MatchMessages.AIRPLANE_APPEARED, new AirplaneAppeared(airplaneId, heading.name(), plan.row())));
     }
 
     /**
@@ -958,7 +1312,7 @@ public final class Match {
             return;
         }
         DroppedItem placed = placeItem(cell, drop.item());
-        long fallMs = AirDrop.fallMs(cell.row());
+        long fallMs = AirDrop.FALL_MS;
         falling.add(new FallingDrop(placed.itemId(), now + fallMs));
         events.add(toAll(MatchMessages.ITEM_DROPPED, new ItemDropped(airplaneId, placed.itemId(), placed.col(),
                 placed.row(), placed.item(), fallMs)));
@@ -969,14 +1323,14 @@ public final class Match {
      * (tick이 수십 ms마다라 많아야 한 tick 차이다). 아래 중 하나라도 있으면 떨어뜨리지 않는다 (덤불 칸은 떨어뜨린다).
      * <ul>
      *   <li>막힌 칸 (블럭·집 등 지나갈 수 없는 칸, 맵 바깥)</li>
-     *   <li>물풍선, 이미 놓인 아이템</li>
+     *   <li>물풍선이 차지한 칸({@link #holds}: 던진 물풍선이 내려앉을 칸 포함), 이미 놓인 아이템</li>
      *   <li>물줄기가 남은 칸. 클라이언트는 물줄기 칸의 아이템을 바로 지운다</li>
      * </ul>
      * <p>사람은 막지 않는다. 사람이 서 있어도 떨어뜨리고, 아이템이 닿는 순간 그 칸에 선 사람이 바로 먹는다
      * ({@link #landFallingDrops}).</p>
      */
     private boolean canDropAt(Cell cell, long now) {
-        return !map.isSolid(cell.col(), cell.row()) && balloonAt(cell) == null && itemAt(cell) == null
+        return !map.isSolid(cell.col(), cell.row()) && !holds(cell) && itemAt(cell) == null
                 && flameAt(cell, now) == null;
     }
 
@@ -1026,13 +1380,56 @@ public final class Match {
         return player != null && player.connectionId() == connectionId ? player : null;
     }
 
-    private Balloon balloonAt(Cell cell) {
+    /** cell에 가만히 놓인(미끄러지지도 날지도 않는) 물풍선. 없으면 null */
+    private Balloon restingAt(Cell cell) {
         for (Balloon balloon : balloons) {
-            if (balloon.cell().equals(cell)) {
+            if (balloon.isResting() && balloon.cell().equals(cell)) {
                 return balloon;
             }
         }
         return null;
+    }
+
+    /**
+     * cell에 있는 물풍선 모두. 나는 물풍선은 어느 칸에도 없고, 미끄러지는 물풍선은 가운데가 가장 가까운 칸에 있다.
+     * 미끄러지는 물풍선이 다른 물풍선 위를 지나는 동안에는 둘일 수 있다. 물줄기가 맞히는 물풍선이다.
+     */
+    private List<Balloon> balloonsAt(Cell cell) {
+        List<Balloon> found = new ArrayList<>();
+        for (Balloon balloon : balloons) {
+            if (!balloon.isFlying() && balloon.cell().equals(cell)) {
+                found.add(balloon);
+            }
+        }
+        return found;
+    }
+
+    /** except 말고 다른 물풍선의 칸이 cell인지. 놓였거나 미끄러지는 물풍선은 지금 칸, 나는 물풍선은 내려앉을 칸이다 */
+    private boolean hasBalloon(Cell cell, Balloon except) {
+        for (Balloon balloon : balloons) {
+            if (balloon != except && balloon.cell().equals(cell)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * cell을 물풍선이 차지했거나 곧 차지할지 (클라이언트 BalloonField.holds): 놓였거나 미끄러지는 물풍선이 있는 칸,
+     * 미끄러지는 물풍선이 칸 가운데를 떠나 막 들어가려는 칸, 던진 물풍선이 내려앉을 칸.
+     * 이런 칸에는 물풍선을 놓거나 상자를 밀어 넣거나 스프링 신발로 내려앉지 않고, 비행기도 아이템을 떨어뜨리지 않는다.
+     */
+    private boolean holds(Cell cell) {
+        if (hasBalloon(cell, null)) {
+            return true;
+        }
+        for (Balloon balloon : balloons) {
+            if (balloon.isSliding() && balloon.isLeavingCenter()
+                    && ahead(balloon.cell(), balloon.slideDirection(), 1).equals(cell)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private FieldItem itemAt(Cell cell) {
@@ -1042,6 +1439,58 @@ public final class Match {
             }
         }
         return null;
+    }
+
+    /**
+     * player를 맞힌 물줄기. 맞지 않았으면 null (클라이언트 BattleRules.soakingOwners와 같은 판정).
+     *
+     * <p>충돌 박스가 걸친 가로 줄마다, 세로 열마다 물줄기가 덮은 칸과 겹친 넓이를 박스 넓이에 대한 비율로 재어, 어느 한 줄이나
+     * 한 열에서라도 {@link #SOAK_SHARE} 이상이면 맞은 것이다. 그래서 네 칸이 만나는 곳에 서면 십자 물줄기가 그 가운데 세 칸을
+     * 덮어도 가로 줄기·세로 줄기와 각각 절반씩만 겹쳐 맞지 않는다(크아의 걸치기).</p>
+     *
+     * <p>맞았으면 박스와 가장 많이 겹친 물줄기 칸의 물줄기를 고른다(넓이가 같으면 위·왼쪽 칸). 그 칸에서는
+     * {@link #flameAt}처럼 가까이에서 터진 물줄기다.</p>
+     */
+    private Flame soakingFlame(MatchPlayer player, long now) {
+        int left = player.leftCol();
+        int right = player.rightCol();
+        int top = player.topRow();
+        int bottom = player.bottomRow();
+        boolean soaked = false;
+        for (int row = top; row <= bottom && !soaked; row++) {
+            double wet = 0;
+            for (int col = left; col <= right; col++) {
+                if (flameAt(new Cell(col, row), now) != null) {
+                    wet += player.widthShareIn(col);
+                }
+            }
+            soaked = player.heightShareIn(row) * wet >= SOAK_SHARE - SHARE_SLACK;
+        }
+        for (int col = left; col <= right && !soaked; col++) {
+            double wet = 0;
+            for (int row = top; row <= bottom; row++) {
+                if (flameAt(new Cell(col, row), now) != null) {
+                    wet += player.heightShareIn(row);
+                }
+            }
+            soaked = player.widthShareIn(col) * wet >= SOAK_SHARE - SHARE_SLACK;
+        }
+        if (!soaked) {
+            return null;
+        }
+        Flame best = null;
+        double bestShare = -1;
+        for (int row = top; row <= bottom; row++) {
+            for (int col = left; col <= right; col++) {
+                Flame flame = flameAt(new Cell(col, row), now);
+                double share = player.widthShareIn(col) * player.heightShareIn(row);
+                if (flame != null && share > bestShare) {
+                    best = flame;
+                    bestShare = share;
+                }
+            }
+        }
+        return best;
     }
 
     /** 그 칸을 덮은 물줄기. 여럿이면 터진 칸이 가까운 것, 거리가 같으면 늦게 터진 것 (클라이언트 wetOwnersAt과 같은 순서) */
@@ -1069,8 +1518,129 @@ public final class Match {
         return new MatchEvent(List.copyOf(connections), type, body);
     }
 
-    /** 놓인 물풍선. range는 놓을 때의 주인 물줄기 길이이고 나중에 바뀌지 않는다 */
-    private record Balloon(int balloonId, long ownerId, Cell cell, int range, long fuseAt) {
+    /**
+     * 맵 위의 물풍선. range는 놓을 때의 주인 물줄기 길이이고 나중에 바뀌지 않는다.
+     * 가만히 놓였거나, 차여 미끄러지거나, 던져져 난다. 칸은 놓인 칸, 미끄러지는 중이면 가운데가 가장 가까운 칸,
+     * 나는 중이면 내려앉을 칸이다. 움직이는 동안에도 퓨즈는 그대로 흐른다.
+     */
+    private static final class Balloon {
+
+        private final int balloonId;
+        private final long ownerId;
+        private final int range;
+        private Cell cell;
+        private long fuseAt;
+        /** 미끄러지는 방향. 미끄러지지 않으면 null */
+        private Facing slideDirection;
+        /** 칸 가운데를 떠나 다음 칸 쪽으로 가는 중인지. 아니면 지금 칸 가운데로 다가오는 중이다 */
+        private boolean leavingCenter;
+        /** 미끄러지며 다음에 판정할 시각: 칸 경계를 넘을 때(leavingCenter) 또는 칸 가운데에 올 때 */
+        private long nextSlideAt;
+        /** 나는 방향. 날지 않으면 null */
+        private Facing flightDirection;
+        private long landsAt;
+
+        Balloon(int balloonId, long ownerId, Cell cell, int range, long fuseAt) {
+            this.balloonId = balloonId;
+            this.ownerId = ownerId;
+            this.cell = cell;
+            this.range = range;
+            this.fuseAt = fuseAt;
+        }
+
+        int balloonId() {
+            return balloonId;
+        }
+
+        long ownerId() {
+            return ownerId;
+        }
+
+        Cell cell() {
+            return cell;
+        }
+
+        int range() {
+            return range;
+        }
+
+        long fuseAt() {
+            return fuseAt;
+        }
+
+        /** 퓨즈를 at으로 당긴다. 그 자리에서 바로 터져야 할 때 쓴다 (이미 더 이르면 그대로) */
+        void burstBy(long at) {
+            fuseAt = Math.min(fuseAt, at);
+        }
+
+        boolean isResting() {
+            return slideDirection == null && flightDirection == null;
+        }
+
+        boolean isSliding() {
+            return slideDirection != null;
+        }
+
+        boolean isFlying() {
+            return flightDirection != null;
+        }
+
+        Facing slideDirection() {
+            return slideDirection;
+        }
+
+        boolean isLeavingCenter() {
+            return leavingCenter;
+        }
+
+        long nextSlideAt() {
+            return nextSlideAt;
+        }
+
+        /** 지금 칸 가운데에서 direction 쪽으로 미끄러지기 시작한다. leavesAt에 칸 경계를 넘는다 */
+        void startSliding(Facing direction, long leavesAt) {
+            slideDirection = direction;
+            leaveCenter(leavesAt);
+        }
+
+        /** 칸 가운데를 떠난다. crossesAt에 칸 경계를 넘는다 */
+        void leaveCenter(long crossesAt) {
+            leavingCenter = true;
+            nextSlideAt = crossesAt;
+        }
+
+        /** 칸 경계를 넘어 next 칸에 들어간다. centerAt에 그 칸 가운데에 온다 */
+        void enter(Cell next, long centerAt) {
+            cell = next;
+            leavingCenter = false;
+            nextSlideAt = centerAt;
+        }
+
+        /** 지금 칸 가운데에 선다 */
+        void stopSliding() {
+            slideDirection = null;
+            leavingCenter = false;
+        }
+
+        Facing flightDirection() {
+            return flightDirection;
+        }
+
+        long landsAt() {
+            return landsAt;
+        }
+
+        /** direction 쪽 to 칸으로 날아 landsAt에 내려앉는다. 칸은 바로 내려앉을 칸이 된다 */
+        void startFlying(Facing direction, Cell to, long landsAt) {
+            flightDirection = direction;
+            cell = to;
+            this.landsAt = landsAt;
+        }
+
+        /** 내려앉는다. 칸은 이미 내려앉을 칸이다 */
+        void stopFlying() {
+            flightDirection = null;
+        }
     }
 
     /** 터진 물풍선이 남긴 물줄기 */

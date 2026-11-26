@@ -453,6 +453,100 @@ class GameFlowTest {
         }
     }
 
+    /** BALLOON_THROW·BALLOON_KICK body: 물풍선 칸과 방향 */
+    private static JsonNode cellAndDirection(long playerId, int col, int row, String direction) {
+        return Json.object().put("playerId", playerId).put("col", col).put("row", row).put("direction", direction);
+    }
+
+    private static int itemIdOf(JsonNode exploded, String item) {
+        for (JsonNode dropped : exploded.get("items")) {
+            if (dropped.get("item").asText().equals(item)) {
+                return dropped.get("itemId").asInt();
+            }
+        }
+        throw new AssertionError(item + "이(가) 나오지 않았습니다: " + exploded);
+    }
+
+    @Test
+    void 장갑으로_던지면_BALLOON_THROWN을_신발로_차면_BALLOON_KICKED와_멈춘_뒤_BALLOON_STOPPED를_방_전체가_받고_틀린_요청은_조용히_버린다()
+            throws Exception {
+        try (Client red = new Client(); Client blue = new Client()) {
+            List<Long> ids = connectionIds(2);
+            startMatch(ids.get(0), ids.get(1));
+            beginRound(red, blue);
+            dropShoeAtCorner(red, blue);
+            pickUpShoe(red, blue);
+            // 캠프08 (0,2) 블럭에는 고정 드롭 장갑이 있다. (1,2)에서 터뜨려 꺼내고 줍는다
+            int glove = itemIdOf(explodeFrom(red, blue, 1, 2), "glove");
+            red.send("MOVE", moveTo(1, 0, 2));
+            red.send("ITEM_PICKUP", Json.object().put("playerId", 1).put("itemId", glove));
+            assertEquals("glove", red.receive("ITEM_TAKEN").get("body").get("item").asText());
+            blue.receive("ITEM_TAKEN");
+
+            // (0,2)에서 아래를 보고 발밑에 놓은 물풍선을 던진다. 아래로 6칸째 (0,8)은 빈 칸이다
+            red.send("MOVE", stopAt(1, 0, 2, "DOWN"));
+            red.send("BALLOON_PLACE", Json.object().put("playerId", 1).put("col", 0).put("row", 2));
+            red.receive("BALLOON_PLACED");
+            blue.receive("BALLOON_PLACED");
+            red.send("BALLOON_THROW", Json.object().put("playerId", 1).put("col", 0).put("row", 2));
+            red.send("BALLOON_THROW", cellAndDirection(1, 0, 2, "옆"));
+            red.send("BALLOON_THROW", cellAndDirection(1, 0, 2, "UP"));
+            red.send("BALLOON_THROW", cellAndDirection(1, 0, 2, "DOWN"));
+            // 이미 날아간 물풍선을 한 번 더 던지는 늦은 요청
+            red.send("BALLOON_THROW", cellAndDirection(1, 0, 2, "DOWN"));
+
+            // 틀리거나 던질 수 없는 요청에는 ERROR가 없으므로 빨강이 다음에 받는 것은 BALLOON_THROWN이다
+            JsonNode thrown = red.receive();
+            assertEquals("BALLOON_THROWN", thrown.get("type").asText());
+            for (JsonNode body : List.of(thrown.get("body"), blue.receive("BALLOON_THROWN").get("body"))) {
+                assertEquals(1, body.get("playerId").asLong());
+                assertEquals(List.of(0, 2, 0, 8), List.of(body.get("col").asInt(), body.get("row").asInt(),
+                        body.get("toCol").asInt(), body.get("toRow").asInt()));
+                assertEquals("DOWN", body.get("direction").asText());
+                assertEquals(360, body.get("flightMs").asLong());
+            }
+            int thrownId = thrown.get("body").get("balloonId").asInt();
+
+            clock.addAndGet(Match.FUSE_MS);
+            gameService.tick();
+            JsonNode landed = red.receive("BALLOON_EXPLODED").get("body").get("balloons").get(0);
+            blue.receive("BALLOON_EXPLODED");
+            assertEquals(List.of(thrownId, 0, 8), List.of(landed.get("balloonId").asInt(), landed.get("col").asInt(),
+                    landed.get("row").asInt()));
+            clock.addAndGet(Match.FLAME_MS);
+            gameService.tick();
+
+            // (1,0)에 놓은 물풍선을 (0,0)에서 오른쪽으로 찬다. 덤불 (2,0)을 지나 석상 (3,0) 앞에 멈춘다
+            red.send("MOVE", moveTo(1, 1, 0));
+            red.send("BALLOON_PLACE", Json.object().put("playerId", 1).put("col", 1).put("row", 0));
+            red.send("MOVE", stopAt(1, 0, 0, "RIGHT"));
+            red.receive("BALLOON_PLACED");
+            blue.receive("BALLOON_PLACED");
+            red.send("BALLOON_KICK", Json.object().put("playerId", 1).put("col", 1).put("row", 0));
+            red.send("BALLOON_KICK", cellAndDirection(1, 1, 0, "옆"));
+            red.send("BALLOON_KICK", cellAndDirection(1, 1, 0, "DOWN"));
+            red.send("BALLOON_KICK", cellAndDirection(1, 1, 0, "RIGHT"));
+
+            JsonNode kicked = red.receive();
+            assertEquals("BALLOON_KICKED", kicked.get("type").asText());
+            for (JsonNode body : List.of(kicked.get("body"), blue.receive("BALLOON_KICKED").get("body"))) {
+                assertEquals(List.of(1, 1, 0), List.of(body.get("playerId").asInt(), body.get("col").asInt(),
+                        body.get("row").asInt()));
+                assertEquals("RIGHT", body.get("direction").asText());
+            }
+            int kickedId = kicked.get("body").get("balloonId").asInt();
+
+            // 한 칸 미끄러지는 데 0.1초
+            clock.addAndGet(100);
+            gameService.tick();
+            for (JsonNode body : List.of(red.receive("BALLOON_STOPPED").get("body"),
+                    blue.receive("BALLOON_STOPPED").get("body"))) {
+                assertEquals(List.of(kickedId, 2, 0), List.of(body.get("balloonId").asInt(), body.get("col").asInt(),
+                        body.get("row").asInt()));
+            }
+        }
+    }
+
     @Test
     void 나가기를_누르면_남은_사람이_PLAYER_LEFT와_GAME_OVER를_받는다() throws Exception {
         try (Client red = new Client(); Client blue = new Client()) {

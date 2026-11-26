@@ -203,6 +203,38 @@ class MatchItemTest {
     }
 
     @Test
+    void 비율표에는_탱크가_없어서_탱크_구간이던_난수에도_다른_아이템이_나온다() {
+        // 둘째 난수 0.79는 탱크가 있던 비율표(합 100)에서는 탱크(78~81)였지만, 탱크를 뺀 합 97에서는 76.63이라 신발(72~78)이다
+        Match match = playing(new ScriptedRandom(0.0, 0.79));
+
+        BalloonExploded exploded = explodeAt(match, 5, PLAY);
+
+        assertEquals(List.of(new DroppedItem(1, 4, 0, "shoe")), exploded.items());
+    }
+
+    @Test
+    void 탱크는_맵에_적힌_고정_드롭으로_나온다() {
+        // 3×3 맵. (0,0) 블럭에 고정 드롭 탱크. 1P(0,2)·2P(2,2). 고정 드롭이라 난수를 쓰지 않는다
+        GameMap tankMap = MapLoader.parse("test/tank", List.of(
+                "[floor]", "...", "...", "...",
+                "[block]", "B..", "...", "...",
+                "[spawn]", "...", "...", "1.2",
+                "[item]", "t..", "...", "..."));
+        Match match = new Match(1, tankMap, List.of(
+                new MatchPlayer(RED_1, CONN_RED, "빨강", Mascot.of("kkukku"), Team.RED, 1, tankMap.spawns().get(0)),
+                new MatchPlayer(BLUE, CONN_BLUE, "파랑", Mascot.of("kkukku"), Team.BLUE, 2, tankMap.spawns().get(1))),
+                NO_RANDOM);
+        match.start(0);
+        match.loaded(CONN_RED, 0);
+        match.loaded(CONN_BLUE, 0);
+        match.tick(PLAY);
+
+        BalloonExploded exploded = explodeAt(match, 1, PLAY);
+
+        assertEquals(List.of(new DroppedItem(1, 0, 0, "tank")), exploded.items());
+    }
+
+    @Test
     void 물줄기가_덮은_칸의_아이템은_removedItems로_사라진다() {
         Match match = playing(NO_RANDOM);
         long later = dropFluidAtCorner(match);

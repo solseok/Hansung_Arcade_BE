@@ -40,11 +40,18 @@ public final class RoomHandlers {
         dispatcher.register("ROOM_LEAVE", (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.leave(id, reply)));
         dispatcher.register("CHANGE_MAP",
                 (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.changeMap(id, string(b, "mapId"), reply)));
+        dispatcher.register("CHANGE_SLOT", (c, r) -> handle(c, r, (id, p, b, reply) -> {
+            int slot = integer(b, "slot");
+            if (!b.path("open").isBoolean()) {
+                throw bad("open은 true나 false여야 합니다.");
+            }
+            rooms.changeSlot(id, slot, b.get("open").booleanValue(), reply);
+        }));
         dispatcher.register("GAME_START", (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.startGame(id, reply)));
-        dispatcher.register("SELECT_CHARACTER",
-                (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.selectCharacter(id, string(b, "character"))));
-        dispatcher.register("SELECT_TEAM",
-                (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.selectTeam(id, string(b, "team"))));
+        dispatcher.register("SELECT_CHARACTER", (c, r) -> handle(c, r,
+                (id, p, b, reply) -> rooms.selectCharacter(id, optionalPlayerId(b), string(b, "character"))));
+        dispatcher.register("SELECT_TEAM", (c, r) -> handle(c, r,
+                (id, p, b, reply) -> rooms.selectTeam(id, optionalPlayerId(b), string(b, "team"))));
         dispatcher.register("READY", (c, r) -> handle(c, r, (id, p, b, reply) -> {
             if (!b.path("ready").isBoolean()) {
                 throw bad("ready는 true나 false여야 합니다.");
@@ -52,15 +59,9 @@ public final class RoomHandlers {
             rooms.ready(id, b.get("ready").booleanValue());
         }));
         dispatcher.register("CHAT", (c, r) -> handle(c, r, (id, p, b, reply) -> {
-            JsonNode player = b.get("playerId");
-            long playerId = p.getFirst().playerId();
-            if (player != null && !player.isNull()) {
-                if (!player.isIntegralNumber() || !player.canConvertToLong()) {
-                    throw bad("playerId는 정수여야 합니다.");
-                }
-                playerId = player.longValue();
-            }
-            rooms.chat(id, playerId, string(b, "text"));
+            // 보낸 사람이 없으면 로그인 순서의 1P다
+            Long sender = optionalPlayerId(b);
+            rooms.chat(id, sender != null ? sender : p.getFirst().playerId(), string(b, "text"));
         }));
     }
 
@@ -110,17 +111,36 @@ public final class RoomHandlers {
 
     private static String string(JsonNode body, String field) throws ProtocolException {
         if (!body.path(field).isTextual()) {
-            throw bad(field + (Set.of("title", "team").contains(field) ? "은" : "는") + " 문자열이어야 합니다.");
+            throw bad(field + topic(field) + " 문자열이어야 합니다.");
         }
         return body.get(field).textValue();
+    }
+
+    /** body의 playerId (CHAT의 보낸 사람, SELECT_CHARACTER·SELECT_TEAM의 고른 사람). 없거나 null이면 null */
+    private static Long optionalPlayerId(JsonNode body) throws ProtocolException {
+        JsonNode player = body.get("playerId");
+        if (player == null || player.isNull()) {
+            return null;
+        }
+        if (!player.isIntegralNumber() || !player.canConvertToLong()) {
+            throw bad("playerId는 정수여야 합니다.");
+        }
+        return player.longValue();
     }
 
     private static int integer(JsonNode body, String field) throws ProtocolException {
         JsonNode node = body.path(field);
         if (!node.isIntegralNumber() || !node.canConvertToInt()) {
-            throw bad(field + "는 정수여야 합니다.");
+            throw bad(field + topic(field) + " 정수여야 합니다.");
         }
         return node.intValue();
+    }
+
+    /**
+     * 필드 이름 뒤에 붙일 조사. 받침으로 끝나게 읽히는 이름(타이틀·팀·슬롯)은 "은", 나머지는 "는"이다.
+     */
+    private static String topic(String field) {
+        return Set.of("title", "team", "slot").contains(field) ? "은" : "는";
     }
 
     private static ProtocolException bad(String message) {

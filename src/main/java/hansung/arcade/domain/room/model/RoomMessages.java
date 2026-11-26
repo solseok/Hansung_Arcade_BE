@@ -26,7 +26,15 @@ public final class RoomMessages {
     public record RoomSummary(int number, String title, int players, int capacity, String mapId, String status) {
     }
 
-    public record RoomInfo(int number, String title, int capacity, String mapId, String status) {
+    /**
+     * @param closedSlots 닫힌 자리 번호 (작은 순서). 방장이 닫은 자리와 맵 최대 인원 밖 자리를 모두 넣는다
+     */
+    public record RoomInfo(int number, String title, int capacity, String mapId, String status,
+            List<Integer> closedSlots) {
+
+        public RoomInfo {
+            closedSlots = List.copyOf(closedSlots);
+        }
     }
 
     public record SeatedPlayer(long playerId, String nickname, int slot, String character, String team, boolean ready) {
@@ -49,7 +57,8 @@ public final class RoomMessages {
     }
 
     public static RoomState state(Room r) {
-        return new RoomState(new RoomInfo(r.number(), r.title(), r.capacity(), r.mapId(), r.status().name()),
+        return new RoomState(new RoomInfo(r.number(), r.title(), r.capacity(), r.mapId(), r.status().name(),
+                r.closedSlots()),
                 r.hostId(), r.members().stream().map(m -> new SeatedPlayer(m.playerId(), m.nickname(), m.slot(),
                         m.character(), m.team().name(), m.ready())).toList());
     }

@@ -157,6 +157,44 @@ class RoomTest {
     }
 
     @Test
+    void playerId를_주면_그_플레이어만_바꾸고_준비는_그_연결_전체가_풀린다() {
+        Room room = new Room(1, "a", 8);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        room.seat(200, players(2, 3), "kkukku", Team.RED);
+        room.ready(200, true);
+
+        assertTrue(room.selectCharacter(200, 3L, "kkokko"));
+        assertEquals(List.of("kkukku", "kkokko"), room.membersOf(200).stream().map(RoomMember::character).toList());
+        assertEquals(List.of(false, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+
+        room.ready(200, true);
+        assertTrue(room.selectTeam(200, 2L, Team.BLUE));
+        assertEquals(List.of(Team.BLUE, Team.RED), room.membersOf(200).stream().map(RoomMember::team).toList());
+        assertEquals(List.of(false, false), room.membersOf(200).stream().map(RoomMember::ready).toList());
+
+        // 그 플레이어가 이미 그 값이면 아무것도 바뀌지 않는다 (다른 플레이어 값은 보지 않는다)
+        room.ready(200, true);
+        assertFalse(room.selectCharacter(200, 3L, "kkokko"));
+        assertFalse(room.selectTeam(200, 2L, Team.BLUE));
+        assertEquals(List.of(true, true), room.membersOf(200).stream().map(RoomMember::ready).toList());
+
+        // 다른 연결의 플레이어는 고를 수 없다
+        assertFalse(room.selectCharacter(200, 1L, "sangzzi"));
+        assertEquals("kkukku", room.membersOf(100).getFirst().character());
+    }
+
+    @Test
+    void 플레이어마다_다른_캐릭터와_팀으로_앉힌다() {
+        Room room = new Room(1, "a", 8);
+
+        List<RoomMember> seated = room.seat(100, players(1, 2),
+                p -> p.playerId() == 1 ? "kkukku" : "kkokko", p -> p.playerId() == 1 ? Team.RED : Team.BLUE);
+
+        assertEquals(List.of("kkukku", "kkokko"), seated.stream().map(RoomMember::character).toList());
+        assertEquals(List.of(Team.RED, Team.BLUE), seated.stream().map(RoomMember::team).toList());
+    }
+
+    @Test
     void 연결의_플레이어와_방장_연결을_찾는다() {
         Room room = new Room(1, "a", 8);
         room.seat(100, players(1, 2), "kkukku", Team.RED);
@@ -293,6 +331,143 @@ class RoomTest {
         assertThrows(IllegalStateException.class, () -> room.changeMap("village/village10"));
         assertEquals("camp/camp08", room.mapId());
         assertEquals(8, room.capacity());
+    }
+
+    @Test
+    void 정원_N으로_만들면_N번부터_닫힌_자리다() {
+        assertEquals(List.of(), new Room(1, "a", 8).closedSlots());
+        Room room = new Room(1, "a", 4);
+
+        assertEquals(List.of(4, 5, 6, 7), room.closedSlots());
+        assertEquals(4, room.capacity());
+    }
+
+    @Test
+    void 빈_자리를_닫으면_정원이_줄고_다시_열면_는다() {
+        Room room = new Room(1, "a", 8);
+        room.seat(100, players(1), "kkukku", Team.RED);
+
+        assertTrue(room.setSlotOpen(3, false));
+        assertEquals(List.of(3), room.closedSlots());
+        assertEquals(7, room.capacity());
+        assertFalse(room.setSlotOpen(3, false));
+
+        assertTrue(room.setSlotOpen(3, true));
+        assertEquals(List.of(), room.closedSlots());
+        assertEquals(8, room.capacity());
+        assertFalse(room.setSlotOpen(3, true));
+        assertFalse(room.setSlotOpen(0, true), "사람이 있는 자리는 이미 열려 있습니다.");
+    }
+
+    @Test
+    void 닫힌_자리를_건너뛰어_앉히고_열린_자리가_모자라면_앉힐_수_없다() {
+        Room room = new Room(1, "a", 4);
+        room.setSlotOpen(1, false);
+        room.setSlotOpen(5, true);
+
+        room.seat(100, players(1, 2), "kkukku", Team.RED);
+        room.seat(200, players(3), "kkukku", Team.RED);
+
+        assertEquals(List.of(0, 2, 3), slots(room));
+        assertTrue(room.canSeat(1));
+        assertFalse(room.canSeat(2));
+        room.seat(300, players(4), "kkukku", Team.RED);
+        assertEquals(List.of(0, 2, 3, 5), slots(room));
+        assertFalse(room.canSeat(1));
+        assertThrows(IllegalStateException.class, () -> room.seat(400, players(5), "kkukku", Team.RED));
+    }
+
+    @Test
+    void 사람이_있는_자리는_닫을_수_없다() {
+        Room room = new Room(1, "a", 8);
+        room.seat(100, players(1, 2), "kkukku", Team.RED);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> room.setSlotOpen(1, false));
+
+        assertEquals("SLOT_OCCUPIED", e.getMessage());
+        assertEquals(List.of(), room.closedSlots());
+    }
+
+    @Test
+    void 정원이_2명보다_적어지게는_닫을_수_없다() {
+        Room room = new Room(1, "a", 3);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        assertTrue(room.setSlotOpen(2, false));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> room.setSlotOpen(1, false));
+
+        assertEquals("CAPACITY_INVALID", e.getMessage());
+        assertEquals(2, room.capacity());
+    }
+
+    @Test
+    void 맵_최대_인원_밖_자리는_열_수_없고_닫기는_이미_닫혀_있어_그대로다() {
+        Room room = new Room(1, "a", 8);
+        room.changeMap("village/village10");
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> room.setSlotOpen(6, true));
+
+        assertEquals("SLOT_LOCKED", e.getMessage());
+        assertFalse(room.setSlotOpen(7, false));
+        assertEquals(List.of(6, 7), room.closedSlots());
+    }
+
+    @Test
+    void 맵을_바꿔_열린_자리가_빠져도_정원은_2명_아래로_떨어지지_않는다() {
+        Room room = new Room(1, "a", 2);
+        room.seat(100, players(1), "kkukku", Team.RED);
+        room.setSlotOpen(7, true);
+        room.setSlotOpen(1, false);
+        assertEquals(List.of(1, 2, 3, 4, 5, 6), room.closedSlots());
+
+        room.changeMap("village/village10");
+
+        assertEquals(2, room.capacity());
+        assertEquals(List.of(2, 3, 4, 5, 6, 7), room.closedSlots(), "방장이 닫은 가장 작은 빈자리를 연다");
+        assertTrue(room.canSeat(1));
+        room.changeMap("camp/camp08");
+        assertEquals(List.of(2, 3, 4, 5, 6), room.closedSlots());
+    }
+
+    @Test
+    void 자리_번호가_0에서_7_밖이면_IllegalArgumentException() {
+        Room room = new Room(1, "a", 8);
+
+        assertThrows(IllegalArgumentException.class, () -> room.setSlotOpen(-1, false));
+        assertThrows(IllegalArgumentException.class, () -> room.setSlotOpen(8, true));
+    }
+
+    @Test
+    void 맵을_되돌리면_방장이_닫은_자리는_그대로고_맵_때문에_닫힌_자리는_다시_열린다() {
+        Room room = new Room(1, "a", 7);
+        room.setSlotOpen(2, false);
+
+        room.changeMap("village/village10");
+        assertEquals(List.of(2, 6, 7), room.closedSlots());
+        assertEquals(5, room.capacity());
+
+        room.changeMap("camp/camp08");
+        assertEquals(List.of(2, 7), room.closedSlots());
+        assertEquals(6, room.capacity());
+    }
+
+    @Test
+    void 맵을_바꿔_밀려난_사람은_열린_빈자리가_모자라면_닫힌_빈자리를_작은_번호부터_열어_앉힌다() {
+        Room room = new Room(1, "a", 8);
+        for (long id = 1; id <= 8; id++) {
+            room.seat(id * 100, players(id), "kkukku", Team.RED);
+        }
+        room.unseat(500);
+        room.unseat(600);
+        room.setSlotOpen(5, false);
+
+        assertTrue(room.changeMap("village/village10"));
+
+        assertEquals(List.of(0, 1, 2, 3, 4, 5), slots(room));
+        assertEquals(List.of(1L, 2L, 3L, 4L, 7L, 8L), ids(room));
+        assertEquals(List.of(6, 7), room.closedSlots());
+        room.changeMap("camp/camp08");
+        assertEquals(List.of(), room.closedSlots(), "앉히려고 연 자리는 맵을 되돌려도 열린 채다.");
     }
 
     @Test

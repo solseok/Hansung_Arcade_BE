@@ -1,6 +1,7 @@
 package hansung.arcade.domain.game.model;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -22,6 +23,18 @@ public final class GameMaps {
     public static final String DEFAULT_ID = "camp/camp08";
 
     static final int RANDOM_MAX_PLAYERS = 8;
+
+    /**
+     * 진영이 나뉜 맵의 진영별 스폰 번호. 캠프 08은 가운데 철조망(7열) 왼쪽 1~4번, 오른쪽 5~8번이다.
+     * 두 팀이 붙으면 팀마다 한 진영에서 시작한다 ({@link SpawnPlan})
+     */
+    private static final Map<String, List<List<Integer>>> SIDES = Map.of(
+            "camp/camp08", List.of(List.of(1, 2, 3, 4), List.of(5, 6, 7, 8)));
+
+    /** 맵의 진영별 스폰 번호. 진영이 없는 맵이면 비어 있다 */
+    static List<List<Integer>> sides(String mapId) {
+        return SIDES.getOrDefault(mapId, List.of());
+    }
 
     public static boolean selectable(String id) {
         return RANDOM.equals(id) || exists(id);

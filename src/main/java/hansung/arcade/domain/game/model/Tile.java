@@ -21,9 +21,13 @@ public enum Tile {
     HARD_BLOCK_3('c', true, true),
     HARD_BLOCK_2('b', true, true),
     HARD_BLOCK_1('a', true, true),
+    /** 오른쪽 면에 가시가 난 블럭. 왼쪽으로 미끄러져 와 오른쪽 면에 닿은 물풍선은 바로 터진다 */
     ONE_WAY_RIGHT('>', true, true),
+    /** 왼쪽 면에 가시가 난 블럭 */
     ONE_WAY_LEFT('<', true, true),
+    /** 위쪽 면에 가시가 난 블럭 */
     ONE_WAY_UP('^', true, true),
+    /** 아래쪽 면에 가시가 난 블럭 */
     ONE_WAY_DOWN('v', true, true),
     STATUE('#', true, false),
     WIRE('W', true, false),
@@ -89,6 +93,22 @@ public enum Tile {
             case HARD_BLOCK_2 -> HARD_BLOCK_1;
             default -> null;
         };
+    }
+
+    /**
+     * travel 쪽으로 미끄러져 오던 물풍선이 이 블럭 앞에 멈출 때 바로 터지는지. 가시 난 면에 닿았을 때만 터진다
+     * (클라이언트 {@code Tile.popsBalloonMoving}). 예를 들어 {@link #ONE_WAY_LEFT}는 오른쪽으로 미끄러져 와 왼쪽 면에 닿은
+     * 물풍선을 터뜨린다.
+     */
+    boolean popsBalloonMoving(Facing travel) {
+        Facing thorn = switch (this) {
+            case ONE_WAY_LEFT -> Facing.LEFT;
+            case ONE_WAY_RIGHT -> Facing.RIGHT;
+            case ONE_WAY_UP -> Facing.UP;
+            case ONE_WAY_DOWN -> Facing.DOWN;
+            default -> null;
+        };
+        return thorn != null && thorn.dx() == -travel.dx() && thorn.dy() == -travel.dy();
     }
 
     /** 맵 파일 글자에 해당하는 타일. 없으면 null */

@@ -6,20 +6,23 @@ import java.util.Objects;
 import java.util.random.RandomGenerator;
 
 /**
- * 비행기 한 번이 떨어뜨릴 칸과 아이템을 정한다. 클라이언트 {@code AirDrop.plan()}과 같은 규칙에
- * 경기 인원만큼 칸을 다시 뽑는 규칙을 더했다.
+ * 비행기 한 번이 지나갈 줄과 그 줄에서 떨어뜨릴 칸·아이템을 정한다 ({@link #plan()}).
  *
- * <p>한 번 나올 때 서로 다른 칸 {@link #DROPS}개를 고르고, 칸마다 {@link #CARGO} 중 하나를 정한다.
- * 비행기는 지나가는 순간 막힌 칸(블럭 등)에는 떨어뜨리지 않아서, 맵 전체에서 아무 칸이나 고르면 0~1개만 떨어지는 일이 많다.
- * 그래서 고른 칸이 지금 막혀 있으면 {@link #attemptsFor(int) 경기 인원에 맞춘 횟수}까지 다시 뽑는다.
- * 2명이면 한 번만 뽑아 클라이언트와 같고, 한 명 늘 때마다 한 번씩 더 뽑아 8명이면 7번까지 뽑는다.
- * 그래도 다 막혀 있으면 마지막에 뽑은 칸을 그대로 쓴다 (지나갈 때 막혀 있으면 떨어뜨리지 않는다).</p>
+ * <p>비행기는 맵의 한 줄을 따라 가로지르고, 그 줄의 칸에만 아이템을 떨어뜨린다. 줄은 나올 때마다 맵의 모든 줄 가운데
+ * 무작위로 고른다 (캠프 08 4:4 영상: 1:59 비행기는 아래쪽 줄, 1:36 비행기는 맨 윗줄을 지났다).
+ * 그 줄에서 서로 다른 칸 {@link #DROPS}개를 고르고, 칸마다 {@link #CARGO} 중 하나를 정한다.
+ * 비행기는 지나가는 순간 막힌 칸(블럭 등)에는 떨어뜨리지 않으므로, 고른 칸이 지금 막혀 있으면
+ * {@link #attemptsFor(int) 경기 인원에 맞춘 횟수}까지 같은 줄에서 다시 뽑는다. 2명이면 한 번만 뽑고, 한 명 늘 때마다
+ * 한 번씩 더 뽑아 8명이면 7번까지 뽑는다. 그래도 다 막혀 있으면 마지막에 뽑은 칸을 그대로 쓴다
+ * (지나갈 때 막혀 있으면 떨어뜨리지 않는다). 줄 자체는 다시 뽑지 않는다.</p>
  *
- * <p>비행기가 나오는 때, 나는 속도, 떨어지는 시간도 여기서 정한다. 모두 클라이언트 {@code Flight}·{@code FallingItem}과 같은 값이다.
+ * <p>비행기가 나오는 때, 나는 속도·높이, 떨어지는 시간도 여기서 정한다. 나오는 때·속도·가속도는 클라이언트 {@code AirDrop}·{@code Flight}·
+ * {@code FallingItem}과 같다. 줄을 따라 나는 높이({@link #DROP_HEIGHT})와 떨어지는 시간({@link #FALL_MS})은 이 규칙으로 새로 정했고,
+ * 클라이언트도 같은 값으로 맞춘다 (Notion AIRPLANE_APPEARED·ITEM_DROPPED).
  * 띄우고 떨어뜨리는 판정과 푸시(AIRPLANE_APPEARED, ITEM_DROPPED)는 경기({@link Match})가 한다.
  * 경기의 맵 사본을 읽으므로 {@link Match}의 잠금 안에서만 부른다.</p>
  *
- * <p>난수는 밖에서 받아서 테스트는 결과를 고정할 수 있다. 뽑을 때마다 칸 · 아이템 순서로 난수를 두 번 쓴다.</p>
+ * <p>난수는 밖에서 받아서 테스트는 결과를 고정할 수 있다. 줄을 고를 때 한 번, 그 뒤 칸을 뽑을 때마다 칸 · 아이템 순서로 두 번 쓴다.</p>
  */
 public final class AirDrop {
 
@@ -38,12 +41,15 @@ public final class AirDrop {
     public static final double SPEED = 220;
     /** 떨어뜨리는 자리가 맵 끝에서 이만큼 바깥에서 들어와 반대쪽 바깥 이만큼에서 사라진다(px) (클라이언트 {@code Flight.OFFSTAGE}) */
     public static final int OFFSTAGE = 80;
-    /** 떨어뜨리는 자리(비행기 배)의 높이, 맵 y(px). 비행기는 맵 맨 위를 가로지른다 (클라이언트 {@code Flight.CRUISE_Y}) */
-    public static final int CRUISE_Y = 46;
+    /**
+     * 떨어뜨리는 자리(비행기 배)가 지나가는 줄의 칸 가운데보다 이만큼 위를 난다(px). 줄의 위쪽 끝(맵 y = row × 40)이다.
+     * 아이템은 여기서 그 줄의 칸 가운데까지 떨어진다
+     */
+    public static final int DROP_HEIGHT = GameMap.TILE_SIZE / 2;
     /** 떨어지는 가속도(px/s²) (클라이언트 {@code FallingItem.GRAVITY}) */
     public static final double GRAVITY = 2400;
-    /** 가장 낮게 떨어질 때의 높이(px). 비행기 배보다 위쪽 칸도 잠깐은 떨어진다 (클라이언트 {@code FallingItem.MIN_HEIGHT}) */
-    public static final double MIN_FALL_HEIGHT = 12;
+    /** 비행기 배에서 줄의 칸 가운데까지 떨어지는 시간(ms). {@link #DROP_HEIGHT} 20px을 {@link #GRAVITY}로 떨어져 129ms다 */
+    public static final long FALL_MS = Math.round(Math.sqrt(2.0 * DROP_HEIGHT / GRAVITY) * 1000);
 
     private final GameMap map;
     private final RandomGenerator random;
@@ -83,47 +89,39 @@ public final class AirDrop {
     }
 
     /**
-     * 비행기 배에서 row 줄의 칸 가운데까지 떨어지는 시간(ms). 맨 윗줄은 0.1초, 아래 줄일수록 길다 (13줄 맵 맨 아랫줄 약 0.6초).
-     * 높이가 {@link #MIN_FALL_HEIGHT}보다 낮으면 그 높이에서 떨어진다.
+     * 이번에 나올 비행기가 지나갈 줄과 그 줄에서 떨어뜨리려는 칸들. 줄을 먼저 무작위로 고르고, 그 줄에서 서로 다른 칸을 고른다.
+     * 지금 막힌 칸(지나갈 수 없는 칸)은 같은 줄에서 인원만큼 다시 뽑아 피한다. 덤불처럼 지나갈 수 있는 칸은 막히지 않은 칸이다.
      */
-    public static long fallMs(int row) {
-        double height = Math.max(MIN_FALL_HEIGHT, GameMap.centerY(row) - CRUISE_Y);
-        return Math.round(Math.sqrt(2 * height / GRAVITY) * 1000);
-    }
-
-    /**
-     * 이번에 나올 비행기가 떨어뜨리려는 칸들. 서로 다른 칸이고, 지금 막힌 칸(지나갈 수 없는 칸)은 인원만큼 다시 뽑아 피한다.
-     * 덤불처럼 지나갈 수 있는 칸은 막히지 않은 칸이다.
-     */
-    public List<Drop> plan() {
-        int cells = map.columns() * map.rows();
+    public Plan plan() {
+        int row = pick(map.rows());
+        int columns = map.columns();
         List<Drop> drops = new ArrayList<>();
         List<Integer> taken = new ArrayList<>();
-        for (int i = 0; i < Math.min(DROPS, cells); i++) {
+        for (int i = 0; i < Math.min(DROPS, columns); i++) {
             Drop drop = null;
-            int index = -1;
+            int col = -1;
             for (int attempt = 0; attempt < attempts; attempt++) {
-                index = unchosen(cells, taken);
-                drop = new Drop(index % map.columns(), index / map.columns(), CARGO.get(pick(CARGO.size())));
-                if (!map.isSolid(drop.col(), drop.row())) {
+                col = unchosen(columns, taken);
+                drop = new Drop(col, row, CARGO.get(pick(CARGO.size())));
+                if (!map.isSolid(col, row)) {
                     break;
                 }
             }
-            taken.add(index);
+            taken.add(col);
             drops.add(drop);
         }
-        return List.copyOf(drops);
+        return new Plan(row, List.copyOf(drops));
     }
 
-    /** 아직 안 고른 칸들 가운데 하나. 고른 칸 번호보다 크거나 같으면 그만큼 건너뛴다 */
-    private int unchosen(int cells, List<Integer> taken) {
-        int cell = pick(cells - taken.size());
+    /** 아직 안 고른 열들 가운데 하나. 고른 열 번호보다 크거나 같으면 그만큼 건너뛴다 */
+    private int unchosen(int columns, List<Integer> taken) {
+        int col = pick(columns - taken.size());
         for (int chosen : taken.stream().sorted().toList()) {
-            if (cell >= chosen) {
-                cell++;
+            if (col >= chosen) {
+                col++;
             }
         }
-        return cell;
+        return col;
     }
 
     /** 0 이상 bound 미만의 정수 하나 */
@@ -131,7 +129,16 @@ public final class AirDrop {
         return Math.min(bound - 1, (int) (random.nextDouble() * bound));
     }
 
-    /** 떨어뜨리려는 칸 하나와 떨어뜨릴 아이템 */
+    /** 떨어뜨리려는 칸 하나와 떨어뜨릴 아이템. row는 비행기가 지나가는 줄이다 */
     public record Drop(int col, int row, ItemType item) {
+    }
+
+    /**
+     * 비행기 한 대의 계획
+     *
+     * @param row   지나가는 줄. 떨어뜨리는 칸은 모두 이 줄에 있다
+     * @param drops 떨어뜨리려는 칸들. 고른 순서
+     */
+    public record Plan(int row, List<Drop> drops) {
     }
 }

@@ -57,6 +57,11 @@ public final class GameMap {
         return block != null ? block : ground[row][col];
     }
 
+    /** 바닥 층 타일. 위에 블럭·덤불이 있어도 그 아래 바닥이다 (클라이언트 TileMap.groundAt). 맵 안에서만 부른다 */
+    Tile groundAt(int col, int row) {
+        return ground[row][col];
+    }
+
     public boolean isSolid(int col, int row) {
         return !isInside(col, row) || tileAt(col, row).isSolid();
     }

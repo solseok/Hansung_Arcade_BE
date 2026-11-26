@@ -142,4 +142,26 @@ class GameServiceTest {
         assertEquals(Match.Phase.COUNTDOWN, failing.matchOf(3).phase());
         assertEquals(2, failing.activeMatches());
     }
+
+    @Test
+    void 캠프_08에서_두_팀이_붙으면_팀마다_한_진영에서_시작한다() {
+        // 판마다 연결 번호가 달라 경기를 열어 둔 채 다음 판을 연다
+        for (int round = 0; round < 20; round++) {
+            List<Participant> eight = new ArrayList<>();
+            for (int i = 0; i < 8; i++) {
+                long id = 100L * round + i + 1;
+                eight.add(player(id, id, i % 2 == 0 ? Team.RED : Team.BLUE));
+            }
+            Match match = service.start("camp/camp08", eight);
+
+            Set<Integer> red = new HashSet<>();
+            for (Participant p : eight) {
+                if (p.team() == Team.RED) {
+                    red.add(match.player(p.playerId()).spawn());
+                }
+            }
+            assertTrue(red.equals(Set.of(1, 2, 3, 4)) || red.equals(Set.of(5, 6, 7, 8)), "round " + round + ": " + red);
+        }
+    }
+
 }
