@@ -40,13 +40,13 @@ class RoomAccessTest {
             Map.entry(Room.class, Set.of("number", "title", "capacity", "mapId", "status", "hostId", "members",
                     "size", "isEmpty", "canSeat", "membersOf", "isHostConnection", "seat", "unseat", "ready",
                     "selectCharacter", "selectTeam", "changeMap", "startPlaying", "cancelPlaying", "finishPlaying", "allReady",
-                    "teamCount")),
+                    "teamCount", "closedSlots", "setSlotOpen")),
             Map.entry(RoomMember.class, Set.of("playerId", "connectionId", "nickname", "slot", "character", "team",
                     "ready")),
             Map.entry(ChatText.class, Set.of("byteLength", "clean", "stripBlank", "isBlank")),
             Map.entry(RoomMessages.class, Set.of("list", "state", "chat", "notice")),
             Map.entry(RoomService.class, Set.of("list", "create", "join", "quickJoin", "leave", "exitGame", "disconnect", "ready",
-                    "selectCharacter", "selectTeam", "changeMap", "chat", "startGame", "finishGame")),
+                    "selectCharacter", "selectTeam", "changeMap", "changeSlot", "chat", "startGame", "finishGame")),
             Map.entry(RoomSender.class, Set.of("send", "sendToLobby", "isConnected")),
             Map.entry(RoomConnections.class, Set.of("onOpen", "onClose", "send", "sendToLobby", "isConnected")),
             Map.entry(RoomListener.class, Set.of("onClose")),
@@ -164,7 +164,8 @@ class RoomAccessTest {
         }
         assertEquals(new TreeSet<>(Set.of("TITLE_INVALID", "CAPACITY_INVALID", "CAPACITY_TOO_SMALL",
                 "ALREADY_IN_ROOM", "ROOM_LIMIT", "ROOM_NOT_FOUND", "ROOM_PLAYING", "ROOM_FULL", "NO_ROOM",
-                "MAP_INVALID", "MAP_TOO_SMALL", "NOT_ENOUGH_PLAYERS", "NOT_ALL_READY", "ONE_TEAM")), codes);
+                "MAP_INVALID", "MAP_TOO_SMALL", "NOT_ENOUGH_PLAYERS", "NOT_ALL_READY", "ONE_TEAM", "SLOT_OCCUPIED",
+                "SLOT_LOCKED")), codes);
     }
 
     @Test

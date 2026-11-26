@@ -33,6 +33,10 @@ public final class RoomErrorCode {
 
     public static final String ONE_TEAM = "ONE_TEAM";
 
+    public static final String SLOT_OCCUPIED = "SLOT_OCCUPIED";
+
+    public static final String SLOT_LOCKED = "SLOT_LOCKED";
+
     private RoomErrorCode() {
     }
 }
