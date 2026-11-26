@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import hansung.arcade.core.net.*;
 import hansung.arcade.domain.player.model.Player;
 import hansung.arcade.domain.room.business.RoomService;
+import hansung.arcade.domain.room.model.RoomMode;
 import hansung.arcade.domain.session.business.SessionService;
 import hansung.arcade.domain.session.model.Session;
 import hansung.arcade.global.exception.GameException;
@@ -32,7 +33,7 @@ public final class RoomHandlers {
     public void registerTo(MessageDispatcher dispatcher) {
         dispatcher.register("ROOM_LIST", (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.list(id, reply)));
         dispatcher.register("ROOM_CREATE", (c, r) -> handle(c, r,
-                (id, p, b, reply) -> rooms.create(id, p, string(b, "title"), integer(b, "capacity"), reply)));
+                (id, p, b, reply) -> rooms.create(id, p, string(b, "title"), integer(b, "capacity"), mode(b), reply)));
         dispatcher.register("ROOM_JOIN",
                 (c, r) -> handle(c, r, (id, p, b, reply) -> rooms.join(id, p, integer(b, "roomNumber"), reply)));
         dispatcher.register("ROOM_QUICK_JOIN",
@@ -126,6 +127,19 @@ public final class RoomHandlers {
             throw bad("playerId는 정수여야 합니다.");
         }
         return player.longValue();
+    }
+
+    /** ROOM_CREATE의 경기 방식. 없거나 null이면 개인전 */
+    private static RoomMode mode(JsonNode body) throws ProtocolException {
+        JsonNode node = body.get("mode");
+        if (node == null || node.isNull()) {
+            return RoomMode.SOLO;
+        }
+        RoomMode mode = node.isTextual() ? RoomMode.parse(node.textValue()) : null;
+        if (mode == null) {
+            throw bad("mode는 SOLO나 TEAM이어야 합니다.");
+        }
+        return mode;
     }
 
     private static int integer(JsonNode body, String field) throws ProtocolException {

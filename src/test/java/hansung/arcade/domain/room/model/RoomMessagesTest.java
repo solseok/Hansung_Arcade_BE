@@ -29,7 +29,7 @@ class RoomMessagesTest {
         RoomMessages.RoomList list = RoomMessages.list(List.of(two, one));
 
         assertEquals(List.of(1, 2), list.rooms().stream().map(RoomMessages.RoomSummary::number).toList());
-        assertEquals(new RoomMessages.RoomSummary(1, "하나", 2, 4, "camp/camp08", "WAITING"), list.rooms().getFirst());
+        assertEquals(new RoomMessages.RoomSummary(1, "하나", 2, 4, "camp/camp08", "WAITING", "SOLO"), list.rooms().getFirst());
     }
 
     @Test
@@ -39,7 +39,8 @@ class RoomMessagesTest {
 
         RoomMessages.RoomState state = RoomMessages.state(room);
 
-        assertEquals(new RoomMessages.RoomInfo(3, "제목", 8, "camp/camp08", "WAITING", List.of()), state.room());
+        assertEquals(new RoomMessages.RoomInfo(3, "제목", 8, "camp/camp08", "WAITING", List.of(), "SOLO",
+                List.of("RED", "YELLOW", "ORANGE", "GREEN", "MINT", "BLUE", "PURPLE", "PINK")), state.room());
         assertEquals(7, state.hostId());
         assertEquals(List.of(new RoomMessages.SeatedPlayer(7, "꼬꼬", 0, "kkokko", "BLUE", false)), state.players());
         assertEquals(new RoomMessages.ChatMessage(7, "꼬꼬", "안녕"),
@@ -64,9 +65,9 @@ class RoomMessagesTest {
     void body_record의_필드_타입은_명세의_JSON_타입과_같다() {
         Map<Class<?>, List<Class<?>>> expected = Map.of(
                 RoomMessages.RoomSummary.class, List.of(int.class, String.class, int.class, int.class, String.class,
-                        String.class),
+                        String.class, String.class),
                 RoomMessages.RoomInfo.class, List.of(int.class, String.class, int.class, String.class, String.class,
-                        List.class),
+                        List.class, String.class, List.class),
                 RoomMessages.SeatedPlayer.class, List.of(long.class, String.class, int.class, String.class,
                         String.class, boolean.class),
                 RoomMessages.ChatMessage.class, List.of(long.class, String.class, String.class));
