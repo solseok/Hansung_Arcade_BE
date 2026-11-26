@@ -41,17 +41,27 @@ class MatchPlayerTest {
     }
 
     @Test
-    void 울트라와_빨간_악마는_물줄기를_한_번에_최댓값으로_올리고_빨간_악마는_밀기도_준다() {
+    void 울트라는_물줄기를_한_번에_최댓값으로_올린다() {
         MatchPlayer ultra = player("sangzzi");
-        MatchPlayer devil = player("sangzzi");
 
         ultra.takeItem(ItemType.ULTRA);
-        devil.takeItem(ItemType.RED_DEVIL);
 
         assertEquals(7, ultra.waterRange());
+        assertEquals(5, ultra.speedLevel());
         assertFalse(ultra.canPushBalloons());
-        assertEquals(7, devil.waterRange());
+    }
+
+    @Test
+    void 빨간_악마는_이동속도를_한_번에_캐릭터_최댓값으로_올리고_물풍선을_밀_수_있게_한다() {
+        MatchPlayer devil = player("sangzzi");
+
+        devil.takeItem(ItemType.RED_DEVIL);
+
+        // 상찌는 속도 5~8, 물줄기 2~7. 물줄기는 그대로다
+        assertEquals(8, devil.speedLevel());
+        assertEquals(2, devil.waterRange());
         assertTrue(devil.canPushBalloons());
+        assertEquals(List.of(ItemType.RED_DEVIL), devil.takenItems());
     }
 
     @Test
