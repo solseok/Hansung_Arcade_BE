@@ -11,6 +11,7 @@ import java.util.SplittableRandom;
 import java.util.random.RandomGenerator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 남은 시간에 맞춰 비행기가 나오고(AIRPLANE_APPEARED), 지나가며 빈 칸에 아이템을 떨어뜨리는지(ITEM_DROPPED) */
@@ -99,6 +100,7 @@ class MatchAirplaneTest {
      */
     private static double[] plan(Cell first, ItemType firstItem, Cell second, ItemType secondItem) {
         assertEquals(first.row(), second.row(), "두 칸은 비행기가 지나가는 같은 줄이어야 합니다");
+        assertNotEquals(first.col(), second.col(), "두 칸은 서로 다른 열이어야 합니다");
         int a = first.col();
         int b = second.col() > a ? second.col() - 1 : second.col();
         return new double[]{(first.row() + 0.5) / ROWS, (a + 0.5) / COLUMNS, cargo(firstItem),

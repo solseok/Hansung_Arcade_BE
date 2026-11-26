@@ -16,7 +16,9 @@ import java.util.random.RandomGenerator;
  * 한 번씩 더 뽑아 8명이면 7번까지 뽑는다. 그래도 다 막혀 있으면 마지막에 뽑은 칸을 그대로 쓴다
  * (지나갈 때 막혀 있으면 떨어뜨리지 않는다). 줄 자체는 다시 뽑지 않는다.</p>
  *
- * <p>비행기가 나오는 때, 나는 속도, 떨어지는 시간도 여기서 정한다. 모두 클라이언트 {@code Flight}·{@code FallingItem}과 같은 값이다.
+ * <p>비행기가 나오는 때, 나는 속도·높이, 떨어지는 시간도 여기서 정한다. 나오는 때·속도·가속도는 클라이언트 {@code AirDrop}·{@code Flight}·
+ * {@code FallingItem}과 같다. 줄을 따라 나는 높이({@link #DROP_HEIGHT})와 떨어지는 시간({@link #FALL_MS})은 이 규칙으로 새로 정했고,
+ * 클라이언트도 같은 값으로 맞춘다 (Notion AIRPLANE_APPEARED·ITEM_DROPPED).
  * 띄우고 떨어뜨리는 판정과 푸시(AIRPLANE_APPEARED, ITEM_DROPPED)는 경기({@link Match})가 한다.
  * 경기의 맵 사본을 읽으므로 {@link Match}의 잠금 안에서만 부른다.</p>
  *
