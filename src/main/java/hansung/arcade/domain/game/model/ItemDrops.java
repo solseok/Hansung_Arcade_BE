@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.random.RandomGenerator;
 
 /**
@@ -14,6 +13,9 @@ import java.util.random.RandomGenerator;
  * <p>나올 확률은 경기 인원에 맞춘다. 2명까지는 {@link #DROP_CHANCE}(33%, 클라이언트와 같다)이고, 한 명 늘 때마다
  * {@link #DROP_CHANCE_PER_EXTRA_PLAYER}(4%p)씩 올라 8명이면 57%다. 블럭 수는 그대로인데 나눠 먹을 사람이 늘어서
  * 그만큼 아이템을 더 뿌린다. 인원은 {@link PlayerCount}로 센다.</p>
+ *
+ * <p>탱크는 비율표에 없다. 탱크는 캠프 08의 내구도 상자(맵 파일 [item] 층의 고정 드롭)에서만 나오고,
+ * 무작위로 나오거나 비행기가 떨어뜨리지 않는다 (나무위키 「캠프 08」: 내구도가 있는 상자에 탱크와 스프링이 있다).</p>
  */
 final class ItemDrops {
 
@@ -21,8 +23,10 @@ final class ItemDrops {
     static final double DROP_CHANCE = 0.33;
     /** 2명을 넘는 한 명마다 더하는 확률 (8명까지) */
     static final double DROP_CHANCE_PER_EXTRA_PLAYER = 0.04;
-    /** 아이템이 나왔을 때 종류별 비율(%). 합이 100이고, 이 순서({@link ItemType} 선언 순서)대로 난수 구간을 나눈다 */
+    /** 아이템이 나왔을 때 종류별 비율. 탱크를 뺀 10종의 합이 {@link #TOTAL}이고, 이 순서({@link ItemType} 선언 순서)대로 난수 구간을 나눈다 */
     static final Map<ItemType, Integer> WEIGHTS = weights();
+    /** {@link #WEIGHTS}의 합. 탱크(3)를 뺀 97이다 */
+    static final int TOTAL = 97;
 
     private ItemDrops() {
     }
@@ -40,28 +44,18 @@ final class ItemDrops {
 
     /**
      * players명 경기에서 블럭 하나가 다 부서졌을 때 나올 아이템. 난수를 두 번까지 쓴다 (나오는지, 무엇인지).
-     * 나올 확률은 그대로이고, 종류는 excluded를 뺀 나머지 비율 안에서 고른다 (예: 탱크를 빼면 합 97에서 고른다).
+     * 종류는 탱크를 뺀 합 {@link #TOTAL} 안에서 고른다.
      *
-     * @param excluded 이 맵에서는 나오지 않는 아이템 ({@link GameMaps#excludedDrops})
      * @return 나온 아이템. 액티브 아이템일 수도 있다. 안 나오면 비어 있다
      */
-    static Optional<ItemType> roll(RandomGenerator random, int players, Set<ItemType> excluded) {
+    static Optional<ItemType> roll(RandomGenerator random, int players) {
         if (random.nextDouble() >= dropChanceFor(players)) {
             return Optional.empty();
         }
-        int total = 0;
-        for (Map.Entry<ItemType, Integer> entry : WEIGHTS.entrySet()) {
-            if (!excluded.contains(entry.getKey())) {
-                total += entry.getValue();
-            }
-        }
-        double pick = random.nextDouble() * total;
+        double pick = random.nextDouble() * TOTAL;
         int bound = 0;
         ItemType last = null;
         for (Map.Entry<ItemType, Integer> entry : WEIGHTS.entrySet()) {
-            if (excluded.contains(entry.getKey())) {
-                continue;
-            }
             bound += entry.getValue();
             last = entry.getKey();
             if (pick < bound) {
@@ -80,13 +74,12 @@ final class ItemDrops {
         weights.put(ItemType.RED_DEVIL, 3);
         weights.put(ItemType.GLOVE, 5);
         weights.put(ItemType.SHOE, 6);
-        weights.put(ItemType.TANK, 3);
         weights.put(ItemType.NEEDLE, 7);
         weights.put(ItemType.SHIELD, 6);
         weights.put(ItemType.SPRING_SHOE, 6);
         int total = weights.values().stream().mapToInt(Integer::intValue).sum();
-        if (total != 100 || weights.size() != ItemType.values().length) {
-            throw new IllegalStateException("아이템 비율은 11종 모두 합쳐 100이어야 합니다: " + weights);
+        if (total != TOTAL || weights.containsKey(ItemType.TANK) || weights.size() != ItemType.values().length - 1) {
+            throw new IllegalStateException("아이템 비율은 탱크를 뺀 10종을 합쳐 " + TOTAL + "이어야 합니다: " + weights);
         }
         return Collections.unmodifiableMap(weights);
     }

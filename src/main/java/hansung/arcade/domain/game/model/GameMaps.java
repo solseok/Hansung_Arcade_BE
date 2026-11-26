@@ -2,7 +2,6 @@ package hansung.arcade.domain.game.model;
 
 import java.util.List;
 import java.util.Random;
-import java.util.Set;
 
 /**
  * 고를 수 있는 맵과 최대 인원. 클라이언트 {@code hansung.arcade.outgame.GameMaps}와 같다.
@@ -23,19 +22,6 @@ public final class GameMaps {
     public static final String DEFAULT_ID = "camp/camp08";
 
     static final int RANDOM_MAX_PLAYERS = 8;
-
-    /** 탱크가 나오는 맵. 탱크는 캠프 08 전용이라 다른 맵에서는 블럭에서 나오지 않는다 */
-    static final Set<String> TANK_MAPS = Set.of("camp/camp08");
-
-    /**
-     * 이 맵에서는 블럭에서 나오지 않는 아이템. 지금은 캠프 08이 아닌 맵의 탱크뿐이다.
-     * 확률표·고정 드롭 모두에 적용한다 ({@link Match}가 블럭을 부술 때).
-     *
-     * @param mapId 실제 맵 id (경기를 열 때 random은 이미 실제 맵으로 바뀌어 있다)
-     */
-    static Set<ItemType> excludedDrops(String mapId) {
-        return TANK_MAPS.contains(mapId) ? Set.of() : Set.of(ItemType.TANK);
-    }
 
     public static boolean selectable(String id) {
         return RANDOM.equals(id) || exists(id);
