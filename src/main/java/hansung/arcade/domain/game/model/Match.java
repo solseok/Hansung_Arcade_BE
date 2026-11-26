@@ -54,8 +54,8 @@ import static hansung.arcade.global.exception.CommonErrorCode.WRONG_STATE;
  * → {@link #COUNTDOWN_MS} 뒤 PLAYING → (남은 팀 하나 · 모두 터짐 · {@link #TIME_LIMIT_MS}) → GAME_OVER
  * </pre>
  *
- * <p>PLAYING 동안 남은 시간이 {@link AirDrop#APPEARANCES_MS}가 되면 비행기가 나와(AIRPLANE_APPEARED) 맵을 가로지르며
- * 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED). 아이템이 칸에 닿는 순간 그 칸에 선 사람이 있으면 바로 먹인다(ITEM_TAKEN).</p>
+ * <p>PLAYING 동안 남은 시간이 {@link AirDrop#APPEARANCES_MS}가 되면 비행기가 나와(AIRPLANE_APPEARED) 맵의 한 줄을 따라
+ * 가로지르며 그 줄의 고른 칸에 아이템을 떨어뜨린다(ITEM_DROPPED). 아이템이 칸에 닿는 순간 그 칸에 선 사람이 있으면 바로 먹인다(ITEM_TAKEN).</p>
  *
  * <p>모든 public 메서드는 이 객체로 잠근다. 받는 스레드(MOVE 등)와 타이머 스레드(tick)가 함께 부른다.</p>
  */
@@ -934,17 +934,18 @@ public final class Match {
         landFallingDrops(now, events);
     }
 
-    /** 비행기를 띄운다. 떨어뜨릴 칸은 지금 맵으로 고르고({@link AirDrop#plan}), 지나가는 순서로 줄 세운다 */
+    /** 비행기를 띄운다. 지나갈 줄과 떨어뜨릴 칸은 지금 맵으로 고르고({@link AirDrop#plan}), 지나가는 순서로 줄 세운다 */
     private void launchAirplane(long now, List<MatchEvent> events) {
         int airplaneId = ++lastAirplaneId;
         Facing heading = AirDrop.headingOf(airplaneId - 1);
+        AirDrop.Plan plan = airDrop.plan();
         List<PassingDrop> drops = new ArrayList<>();
-        for (AirDrop.Drop drop : airDrop.plan()) {
+        for (AirDrop.Drop drop : plan.drops()) {
             drops.add(new PassingDrop(drop, now + AirDrop.passMs(map, heading, drop.col())));
         }
         drops.sort(Comparator.comparingLong(PassingDrop::passAt));
         airplanes.add(new Airplane(airplaneId, new ArrayDeque<>(drops)));
-        events.add(toAll(MatchMessages.AIRPLANE_APPEARED, new AirplaneAppeared(airplaneId, heading.name())));
+        events.add(toAll(MatchMessages.AIRPLANE_APPEARED, new AirplaneAppeared(airplaneId, heading.name(), plan.row())));
     }
 
     /**
@@ -958,7 +959,7 @@ public final class Match {
             return;
         }
         DroppedItem placed = placeItem(cell, drop.item());
-        long fallMs = AirDrop.fallMs(cell.row());
+        long fallMs = AirDrop.FALL_MS;
         falling.add(new FallingDrop(placed.itemId(), now + fallMs));
         events.add(toAll(MatchMessages.ITEM_DROPPED, new ItemDropped(airplaneId, placed.itemId(), placed.col(),
                 placed.row(), placed.item(), fallMs)));
