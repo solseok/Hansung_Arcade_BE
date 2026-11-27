@@ -10,7 +10,6 @@ import hansung.arcade.domain.game.model.Match;
 import hansung.arcade.domain.game.model.Team;
 import hansung.arcade.domain.game.model.MatchEvent;
 import hansung.arcade.domain.player.model.Player;
-import hansung.arcade.domain.room.model.RoomMode;
 import hansung.arcade.global.exception.GameException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
@@ -246,7 +245,7 @@ class RoomServiceTest {
 
         JsonNode state = last(1, "REPLY");
         assertEquals(List.of("room", "hostId", "players"), fieldNames(state));
-        assertEquals(List.of("number", "title", "capacity", "mapId", "status", "closedSlots", "mode", "teams"),
+        assertEquals(List.of("number", "title", "capacity", "mapId", "status", "closedSlots"),
                 fieldNames(state.get("room")));
         assertEquals("[]", state.at("/room/closedSlots").toString());
         assertEquals(List.of("playerId", "nickname", "slot", "character", "team", "ready"),
@@ -409,7 +408,7 @@ class RoomServiceTest {
 
         assertEquals(2, list.get("rooms").size());
         JsonNode first = list.at("/rooms/0");
-        assertEquals(List.of("number", "title", "players", "capacity", "mapId", "status", "mode"), fieldNames(first));
+        assertEquals(List.of("number", "title", "players", "capacity", "mapId", "status"), fieldNames(first));
         assertEquals(1, first.get("number").asInt());
         assertEquals("둘", first.get("title").asText());
         assertEquals(2, first.get("players").asInt());
@@ -2701,134 +2700,5 @@ class RoomServiceTest {
 
         assertNull(games.matchOf(3));
         assertTrue(typesTo(1).contains("PLAYER_LEFT"));
-    }
-
-    // ---------- 팀전 ----------
-
-    private static List<String> texts(JsonNode array) {
-        List<String> values = new ArrayList<>();
-        array.forEach(node -> values.add(node.asText()));
-        return values;
-    }
-
-    @Test
-    void 팀전_방은_ROOM_STATE와_로비_목록에_경기_방식과_고를_수_있는_색을_싣는다() {
-        loggedIn.add(9L);
-        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
-
-        JsonNode created = last(1, "REPLY");
-        assertEquals("TEAM", created.at("/room/mode").asText());
-        assertEquals(List.of("RED", "BLUE"), texts(created.at("/room/teams")));
-        assertEquals("TEAM", last(9, "LOBBY_ROOMS").at("/rooms/0/mode").asText());
-
-        rooms.changeMap(1, "patrit/patrit14", reply(1));
-        assertEquals(List.of("RED", "YELLOW", "GREEN", "BLUE"), texts(last(1, "ROOM_STATE").at("/room/teams")));
-    }
-
-    @Test
-    void 경기_방식을_주지_않고_만든_방은_개인전이고_여덟_색이다() {
-        rooms.create(1, one(1, "방장"), "개인전", 8, reply(1));
-
-        JsonNode created = last(1, "REPLY");
-        assertEquals("SOLO", created.at("/room/mode").asText());
-        assertEquals(8, created.at("/room/teams").size());
-    }
-
-    @Test
-    void 팀전에서_고를_수_없는_색은_TEAM_NOT_ALLOWED이고_맵에_맞는_안내를_준다() {
-        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
-        rooms.join(2, one(2, "손님"), 1, reply(2));
-        clearSent();
-
-        assertCode("TEAM_NOT_ALLOWED", () -> rooms.selectTeam(2, "GREEN"));
-        assertEquals("캠프 08 팀전에서는 빨강·파랑만 고를 수 있습니다.", message(() -> rooms.selectTeam(2, "GREEN")));
-        assertEquals(List.of(), roomStatesTo(1));
-
-        rooms.changeMap(1, "village/village10", reply(1));
-        assertEquals("팀전에서는 빨강·파랑·노랑·초록만 고를 수 있습니다.", message(() -> rooms.selectTeam(2, "PINK")));
-        rooms.selectTeam(2, "GREEN");
-        assertEquals("GREEN", player(last(1, "ROOM_STATE"), "손님").get("team").asText());
-    }
-
-    @Test
-    void 팀전에서_거절된_색은_기억하지_않는다() {
-        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
-        rooms.join(2, one(2, "손님"), 1, reply(2));
-        rooms.selectTeam(2, "BLUE");
-        assertCode("TEAM_NOT_ALLOWED", () -> rooms.selectTeam(2, "PINK"));
-        rooms.leave(2, reply(2));
-
-        rooms.create(2, one(2, "손님"), "개인전", 8, reply(2));
-
-        assertEquals("BLUE", player(last(2, "REPLY"), "손님").get("team").asText());
-    }
-
-    @Test
-    void 개인전에서_고른_색을_쓸_수_없는_팀전_방에_들어가면_사람이_적은_색으로_앉는다() {
-        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
-        rooms.create(2, one(2, "손님"), "개인전", 8, reply(2));
-        rooms.selectTeam(2, "PINK");
-        rooms.leave(2, reply(2));
-
-        rooms.join(2, one(2, "손님"), 1, reply(2));
-
-        assertEquals("BLUE", player(last(2, "REPLY"), "손님").get("team").asText());
-        // 기억한 색은 그대로라 개인전 방에 가면 다시 분홍이다
-        rooms.leave(2, reply(2));
-        rooms.create(2, one(2, "손님"), "개인전", 8, reply(2));
-        assertEquals("PINK", player(last(2, "REPLY"), "손님").get("team").asText());
-    }
-
-    @Test
-    void 팀전에서_캠프08로_바꾸면_옮긴_사람을_ROOM_STATE로_알린다() {
-        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
-        rooms.changeMap(1, "patrit/patrit14", reply(1));
-        rooms.join(2, one(2, "손님"), 1, reply(2));
-        rooms.selectTeam(2, "YELLOW");
-        rooms.ready(2, true);
-
-        rooms.changeMap(1, "camp/camp08", reply(1));
-
-        JsonNode state = last(2, "ROOM_STATE");
-        assertEquals("BLUE", player(state, "손님").get("team").asText());
-        assertFalse(player(state, "손님").get("ready").asBoolean());
-        assertEquals(List.of("RED", "BLUE"), texts(state.at("/room/teams")));
-    }
-
-    @Test
-    void 팀전에_고른_적_없이_들어온_사람은_사람이_적은_색으로_번갈아_앉는다() {
-        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
-        rooms.changeMap(1, "patrit/patrit14", reply(1));
-        rooms.join(2, one(2, "둘"), 1, reply(2));
-        rooms.join(3, two(3, "셋", "넷"), 1, reply(3));
-        rooms.join(4, one(4, "다섯"), 1, reply(4));
-
-        JsonNode state = last(1, "ROOM_STATE");
-        List<String> colors = new ArrayList<>();
-        state.get("players").forEach(p -> colors.add(p.get("team").asText()));
-        assertEquals(List.of("RED", "BLUE", "YELLOW", "GREEN", "RED"), colors);
-    }
-
-    @Test
-    void 개인전에_고른_적_없이_들어온_사람은_예전처럼_빨강이다() {
-        rooms.create(1, one(1, "방장"), "개인전", 8, reply(1));
-        rooms.join(2, one(2, "손님"), 1, reply(2));
-
-        JsonNode state = last(1, "ROOM_STATE");
-        assertEquals("RED", player(state, "방장").get("team").asText());
-        assertEquals("RED", player(state, "손님").get("team").asText());
-    }
-
-    @Test
-    void 팀전_방도_두_팀이어야_시작할_수_있다() {
-        rooms.create(1, one(1, "방장"), "팀전", 8, RoomMode.TEAM, reply(1));
-        rooms.join(2, one(2, "손님"), 1, reply(2));
-        rooms.selectTeam(2, "RED");
-        rooms.ready(2, true);
-
-        assertCode("ONE_TEAM", () -> rooms.startGame(1, reply(1)));
-        rooms.selectTeam(2, "BLUE");
-        rooms.ready(2, true);
-        assertDoesNotThrow(() -> rooms.startGame(1, reply(1)));
     }
 }

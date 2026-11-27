@@ -11,7 +11,6 @@ import java.text.Normalizer;
 import static hansung.arcade.domain.room.exception.RoomErrorCode.CAPACITY_INVALID;
 import static hansung.arcade.domain.room.exception.RoomErrorCode.SLOT_LOCKED;
 import static hansung.arcade.domain.room.exception.RoomErrorCode.SLOT_OCCUPIED;
-import static hansung.arcade.domain.room.exception.RoomErrorCode.TEAM_NOT_ALLOWED;
 import static hansung.arcade.domain.room.exception.RoomErrorCode.TITLE_INVALID;
 
 /**
@@ -21,10 +20,6 @@ import static hansung.arcade.domain.room.exception.RoomErrorCode.TITLE_INVALID;
  * 방장이 닫은 자리와 맵 최대 인원 밖 자리(빌리지면 6·7번)는 닫힌 자리다.
  * 방장이 닫은 자리는 맵과 따로 기억해 두어, 맵을 되돌리면 맵 때문에 닫혔던 자리도 원래대로 돌아온다.
  * 사람은 늘 열린 자리에만 앉는다.</p>
- *
- * <p>팀 색은 경기 방식({@link RoomMode})이 정한 색({@link #teams}) 안에서만 고른다. 개인전은 8색 모두,
- * 팀전은 4색(캠프 08은 2색)이다. 앉힐 때 기억한 색을 쓸 수 없으면 쓸 수 있는 색으로 바꿔 앉히고,
- * 맵이 바뀌어 고를 수 없게 된 색은 쓸 수 있는 색으로 옮긴다.</p>
  */
 public final class Room {
 
@@ -38,8 +33,6 @@ public final class Room {
 
     private final String title;
 
-    private final RoomMode mode;
-
     /** 방장이 닫은 자리. 맵 최대 인원 밖 자리는 여기와 따로 {@link #isClosed}에서 닫힌다 */
     private final boolean[] closedByHost = new boolean[MAX_CAPACITY];
 
@@ -52,12 +45,7 @@ public final class Room {
     private long hostId;
 
     public Room(int number, String title, int capacity) {
-        this(number, title, capacity, RoomMode.SOLO);
-    }
-
-    public Room(int number, String title, int capacity, RoomMode mode) {
         Objects.requireNonNull(title);
-        this.mode = Objects.requireNonNull(mode);
         title = normalizeTitle(title);
         if (capacity < MIN_CAPACITY || capacity > MAX_CAPACITY) {
             throw new IllegalArgumentException(CAPACITY_INVALID);
@@ -92,16 +80,6 @@ public final class Room {
 
     public String title() {
         return title;
-    }
-
-    public RoomMode mode() {
-        return mode;
-    }
-
-    /** 지금 맵에서 고를 수 있는 팀 색 (Team 선언 순서). 개인전은 8색 모두 */
-    public List<Team> teams() {
-        List<Team> allowed = mode.teamsFor(mapId);
-        return Arrays.stream(Team.values()).filter(allowed::contains).toList();
     }
 
     /**
@@ -180,11 +158,7 @@ public final class Room {
         return seat(connection, players, player -> character, player -> team);
     }
 
-    /**
-     * 플레이어마다 다른 캐릭터·팀으로 앉힌다 (1P·2P가 마지막으로 고른 값).
-     * 팀이 null(고른 적 없음)이면 개인전은 빨강, 팀전은 사람이 가장 적은 색으로 앉힌다.
-     * 고를 수 없는 색이어도 사람이 가장 적은 색으로 앉힌다.
-     */
+    /** 플레이어마다 다른 캐릭터·팀으로 앉힌다 (1P·2P가 마지막으로 고른 값) */
     public List<RoomMember> seat(long connection, List<Player> players, Function<Player, String> character,
                                  Function<Player, Team> team) {
         if (players.isEmpty()) {
@@ -196,10 +170,7 @@ public final class Room {
         List<RoomMember> added = new ArrayList<>();
         for (Player p : players) {
             int slot = firstOpenEmptySlot();
-            Team wanted = team.apply(p);
-            Team seatedTeam = wanted != null && teams().contains(wanted) ? wanted
-                    : mode == RoomMode.SOLO && wanted == null ? Team.RED : spareTeam(p.playerId());
-            RoomMember m = new RoomMember(p.playerId(), connection, p.nickname(), slot, character.apply(p), seatedTeam,
+            RoomMember m = new RoomMember(p.playerId(), connection, p.nickname(), slot, character.apply(p), team.apply(p),
                     false);
             seats.put(slot, m);
             added.add(m);
@@ -255,33 +226,14 @@ public final class Room {
         return selectTeam(connection, null, value);
     }
 
-    /**
-     * 팀을 바꾼다. playerId와 준비는 {@link #selectCharacter(long, Long, String)}와 같다.
-     * 이미 그 색이면 고를 수 있는지 따지지 않고 false다.
-     *
-     * @throws IllegalStateException 메시지가 {@code TEAM_NOT_ALLOWED}: 팀전에서 고를 수 없는 색
-     */
+    /** 팀을 바꾼다. playerId와 준비는 {@link #selectCharacter(long, Long, String)}와 같다 */
     public boolean selectTeam(long connection, Long playerId, Team value) {
         if (picked(connection, playerId).noneMatch(m -> m.team() != value)) {
             return false;
         }
-        if (!teams().contains(value)) {
-            throw new IllegalStateException(TEAM_NOT_ALLOWED);
-        }
         seats.replaceAll((s, m) -> m.connectionId() != connection ? m
                 : isPicked(m, playerId) ? m.withTeam(value) : m.withReady(false));
         return true;
-    }
-
-    /**
-     * 색을 정해 줘야 하는 playerId인 사람에게 줄 색: 다른 사람이 가장 적은 색, 같으면 {@link RoomMode#teamsFor} 순서
-     * (팀전은 빨강, 파랑, 노랑, 초록)다. 그래서 팀전에 고른 적 없이 들어온 사람들은 빨강·파랑(·노랑·초록)으로 번갈아 나뉜다.
-     */
-    private Team spareTeam(long playerId) {
-        List<RoomMember> others = seats.values().stream().filter(m -> m.playerId() != playerId).toList();
-        return mode.teamsFor(mapId).stream()
-                .min(Comparator.comparingLong(t -> others.stream().filter(m -> m.team() == t).count()))
-                .orElseThrow();
     }
 
     /** 이 연결의 플레이어 가운데 고른 사람 (playerId가 null이면 모두) */
@@ -331,23 +283,7 @@ public final class Room {
         for (int slot = 0; capacity() < MIN_CAPACITY && slot < limit; slot++) {
             closedByHost[slot] = false;
         }
-        moveOffDisallowedTeams();
         return true;
-    }
-
-    /**
-     * 맵이 바뀌어 고를 수 없게 된 색을 쓰는 사람을 쓸 수 있는 색으로 옮기고, 그 연결의 준비를 푼다 (팀전에서 캠프 08로 바꿀 때).
-     * 자리 순서대로 한 명씩 옮겨, 옮긴 사람도 다음 사람의 "사람이 가장 적은 색"에 센다.
-     */
-    private void moveOffDisallowedTeams() {
-        for (RoomMember before : members()) {
-            if (!teams().contains(before.team())) {
-                // 앞에서 같은 연결의 준비를 풀었을 수 있으니 지금 값에서 바꾼다
-                RoomMember m = seats.get(before.slot());
-                seats.put(m.slot(), m.withTeam(spareTeam(m.playerId())));
-                seats.replaceAll((s, other) -> other.connectionId() == m.connectionId() ? other.withReady(false) : other);
-            }
-        }
     }
 
     /**

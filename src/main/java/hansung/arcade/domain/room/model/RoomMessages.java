@@ -23,22 +23,17 @@ public final class RoomMessages {
         }
     }
 
-    /** @param mode 경기 방식 SOLO·TEAM */
-    public record RoomSummary(int number, String title, int players, int capacity, String mapId, String status,
-            String mode) {
+    public record RoomSummary(int number, String title, int players, int capacity, String mapId, String status) {
     }
 
     /**
      * @param closedSlots 닫힌 자리 번호 (작은 순서). 방장이 닫은 자리와 맵 최대 인원 밖 자리를 모두 넣는다
-     * @param mode        경기 방식 SOLO·TEAM
-     * @param teams       지금 고를 수 있는 팀 색 (Team 순서). 개인전은 8색 모두, 팀전은 4색(캠프 08은 2색)
      */
     public record RoomInfo(int number, String title, int capacity, String mapId, String status,
-            List<Integer> closedSlots, String mode, List<String> teams) {
+            List<Integer> closedSlots) {
 
         public RoomInfo {
             closedSlots = List.copyOf(closedSlots);
-            teams = List.copyOf(teams);
         }
     }
 
@@ -57,14 +52,13 @@ public final class RoomMessages {
 
     public static RoomList list(Collection<Room> rooms) {
         return new RoomList(rooms.stream().sorted(Comparator.comparingInt(Room::number))
-                .map(r -> new RoomSummary(r.number(), r.title(), r.size(), r.capacity(), r.mapId(), r.status().name(),
-                        r.mode().name()))
+                .map(r -> new RoomSummary(r.number(), r.title(), r.size(), r.capacity(), r.mapId(), r.status().name()))
                 .toList());
     }
 
     public static RoomState state(Room r) {
         return new RoomState(new RoomInfo(r.number(), r.title(), r.capacity(), r.mapId(), r.status().name(),
-                r.closedSlots(), r.mode().name(), r.teams().stream().map(Enum::name).toList()),
+                r.closedSlots()),
                 r.hostId(), r.members().stream().map(m -> new SeatedPlayer(m.playerId(), m.nickname(), m.slot(),
                         m.character(), m.team().name(), m.ready())).toList());
     }
