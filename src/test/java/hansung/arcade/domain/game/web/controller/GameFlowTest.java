@@ -536,8 +536,8 @@ class GameFlowTest {
             }
             int kickedId = kicked.get("body").get("balloonId").asInt();
 
-            // 한 칸 미끄러지는 데 0.1초
-            clock.addAndGet(100);
+            // 한 칸 미끄러지는 데 0.2초
+            clock.addAndGet(200);
             gameService.tick();
             for (JsonNode body : List.of(red.receive("BALLOON_STOPPED").get("body"),
                     blue.receive("BALLOON_STOPPED").get("body"))) {
