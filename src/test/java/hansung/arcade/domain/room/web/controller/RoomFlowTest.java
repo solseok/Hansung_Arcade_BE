@@ -700,31 +700,4 @@ class RoomFlowTest {
             assertEquals("게임 중", guest.receive("CHAT_MESSAGE").at("/body/text").asText());
         }
     }
-
-    @Test
-    void 방_만들기에_mode_TEAM을_주면_팀전이고_모르는_값은_BAD_MESSAGE다() throws IOException {
-        try (Client client = new Client("가가")) {
-            for (String mode : List.of("\"team\"", "\"\"", "1", "true")) {
-                client.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4,\"mode\":"
-                        + mode + "}}");
-                JsonNode failed = client.next("ROOM_CREATE");
-                assertEquals("BAD_MESSAGE", failed.at("/error/code").asText(), mode);
-                assertEquals("mode는 SOLO나 TEAM이어야 합니다.", failed.at("/error/message").asText());
-            }
-
-            client.send("{\"type\":\"ROOM_CREATE\",\"id\":3,\"body\":{\"title\":\"a\",\"capacity\":4,\"mode\":\"TEAM\"}}");
-            JsonNode created = client.next("ROOM_CREATE");
-            assertTrue(created.get("ok").asBoolean(), created.toString());
-            assertEquals("TEAM", created.at("/body/room/mode").asText());
-            assertEquals("[\"RED\",\"BLUE\"]", created.at("/body/room/teams").toString());
-        }
-    }
-
-    @Test
-    void 방_만들기의_mode가_null이면_개인전이다() throws IOException {
-        try (Client client = new Client("가가")) {
-            client.send("{\"type\":\"ROOM_CREATE\",\"id\":2,\"body\":{\"title\":\"a\",\"capacity\":4,\"mode\":null}}");
-            assertEquals("SOLO", client.next("ROOM_CREATE").at("/body/room/mode").asText());
-        }
-    }
 }

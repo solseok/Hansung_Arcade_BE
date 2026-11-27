@@ -66,21 +66,11 @@ public final class RoomService {
     }
 
     public void create(long connection, List<Player> players, String title, int capacity, Consumer<Object> reply) {
-        create(connection, players, title, capacity, RoomMode.SOLO, reply);
-    }
-
-    /**
-     * 방을 만들고 방장으로 들어간다.
-     *
-     * @param mode 경기 방식. 팀전이면 고를 수 있는 팀 색이 4색(캠프 08은 2색)이다
-     */
-    public void create(long connection, List<Player> players, String title, int capacity, RoomMode mode,
-                       Consumer<Object> reply) {
         synchronized (lock) {
             requireLobby(connection);
             Room room;
             try {
-                room = new Room(rooms.isEmpty() ? 1 : rooms.lastKey() + 1, title == null ? "" : title, capacity, mode);
+                room = new Room(rooms.isEmpty() ? 1 : rooms.lastKey() + 1, title == null ? "" : title, capacity);
             } catch (IllegalArgumentException e) {
                 if (TITLE_INVALID.equals(e.getMessage())) {
                     throw error(TITLE_INVALID, "방 제목은 1~30자로 입력해 주세요.");
@@ -195,21 +185,8 @@ public final class RoomService {
             }
             Room room = waiting(connection, "대기실에서만 팀을 고를 수 있습니다.");
             requireMine(room, connection, playerId);
-            boolean changed;
-            try {
-                changed = room.selectTeam(connection, playerId, team);
-            } catch (IllegalStateException e) {
-                if (!TEAM_NOT_ALLOWED.equals(e.getMessage())) {
-                    throw e;
-                }
-                // 팀전 색은 4색, 진영이 둘인 캠프 08만 2색이다 (RoomMode.teamsFor)
-                throw error(TEAM_NOT_ALLOWED, room.teams().size() == 2
-                        ? "캠프 08 팀전에서는 빨강·파랑만 고를 수 있습니다."
-                        : "팀전에서는 빨강·파랑·노랑·초록만 고를 수 있습니다.");
-            }
-            // 고를 수 있었던 색만 기억한다. 앉을 때 쓸 수 없는 색이면 방이 다시 바꿔 앉힌다
             remember(teams, room, connection, playerId, team);
-            if (changed) {
+            if (room.selectTeam(connection, playerId, team)) {
                 state(room);
             }
         }
@@ -400,7 +377,7 @@ public final class RoomService {
         Map<Long, Team> lastTeams = teams.getOrDefault(connection, Map.of());
         List<RoomMember> added = room.seat(connection, players,
                 player -> lastCharacters.getOrDefault(player.playerId(), "sangsangbugi"),
-                player -> lastTeams.get(player.playerId()));
+                player -> lastTeams.getOrDefault(player.playerId(), Team.RED));
         memberships.put(connection, room);
         return added;
     }
