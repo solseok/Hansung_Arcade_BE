@@ -37,9 +37,6 @@ public final class RoomErrorCode {
 
     public static final String SLOT_LOCKED = "SLOT_LOCKED";
 
-    /** 팀전에서 고를 수 없는 색 (팀전 4색, 캠프 08은 2색) */
-    public static final String TEAM_NOT_ALLOWED = "TEAM_NOT_ALLOWED";
-
     private RoomErrorCode() {
     }
 }
